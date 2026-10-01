@@ -25,16 +25,30 @@ type ColorField = (&'static str, fn(&Theme) -> Color, fn(&mut Theme, Color));
 
 const COLORS: [ColorField; 8] = [
     ("Accent", |t| t.accent, |t, c| t.accent = c),
-    ("Text on accent", |t| t.accent_text, |t, c| t.accent_text = c),
+    (
+        "Text on accent",
+        |t| t.accent_text,
+        |t, c| t.accent_text = c,
+    ),
     ("Background", |t| t.background, |t, c| t.background = c),
-    ("Surface (cards, buttons)", |t| t.surface, |t, c| t.surface = c),
-    ("Hover, fields, tracks", |t| t.surface_alt, |t, c| t.surface_alt = c),
+    (
+        "Surface (cards, buttons)",
+        |t| t.surface,
+        |t, c| t.surface = c,
+    ),
+    (
+        "Hover, fields, tracks",
+        |t| t.surface_alt,
+        |t, c| t.surface_alt = c,
+    ),
     ("Text", |t| t.text, |t, c| t.text = c),
     ("Secondary text", |t| t.text_dim, |t, c| t.text_dim = c),
     ("Border", |t| t.border, |t, c| t.border = c),
 ];
 
-const ACCENTS: [u32; 8] = [0xb46cff, 0x8a3ffc, 0x4c9aff, 0x3ec99a, 0xffb347, 0xff6b8b, 0xe5484d, 0x9aa0a6];
+const ACCENTS: [u32; 8] = [
+    0xb46cff, 0x8a3ffc, 0x4c9aff, 0x3ec99a, 0xffb347, 0xff6b8b, 0xe5484d, 0x9aa0a6,
+];
 
 const POSITIONS: &[&str] = &["Top", "Bottom"];
 
@@ -171,7 +185,9 @@ impl Appearance {
     }
 
     fn load_edit(&mut self) {
-        let (Some(d), Some(name)) = (&self.bar, &self.selected) else { return };
+        let (Some(d), Some(name)) = (&self.bar, &self.selected) else {
+            return;
+        };
         self.edit = ModuleEdit {
             format: d.module_str(name, "format"),
             disconnected: d.module_str(name, "format-disconnected"),
@@ -223,7 +239,10 @@ impl App for Appearance {
                 let keep = (self.theme.font.clone(), self.theme.animations);
                 self.theme = if light { Theme::light() } else { Theme::dark() };
                 (self.theme.font, self.theme.animations) = keep;
-                self.color_text = COLORS.iter().map(|(_, get, _)| hex(get(&self.theme))).collect();
+                self.color_text = COLORS
+                    .iter()
+                    .map(|(_, get, _)| hex(get(&self.theme)))
+                    .collect();
                 return self.touched(true);
             }
             Msg::Accent(c) => {
@@ -267,42 +286,56 @@ impl App for Appearance {
             Msg::Position(i) => {
                 self.position = i;
                 let v = if i == 1 { "bottom" } else { "top" };
-                self.bar_mut().map(|d| d.set_bar("position", v));
+                if let Some(d) = self.bar_mut() {
+                    d.set_bar("position", v);
+                }
                 return self.touched(false);
             }
             Msg::Height(v) => {
                 self.height = v.round();
                 let v = self.height as i64;
-                self.bar_mut().map(|d| d.set_bar("height", v));
+                if let Some(d) = self.bar_mut() {
+                    d.set_bar("height", v);
+                }
                 return self.touched(false);
             }
             Msg::Reserve(on) => {
                 self.reserve = on;
-                self.bar_mut().map(|d| d.set_bar("reserve-space", on));
+                if let Some(d) = self.bar_mut() {
+                    d.set_bar("reserve-space", on);
+                }
                 return self.touched(false);
             }
             Msg::BarPadding(v) => {
                 self.padding = v.round();
                 let v = self.padding as i64;
-                self.bar_mut().map(|d| d.set_bar("padding", v));
+                if let Some(d) = self.bar_mut() {
+                    d.set_bar("padding", v);
+                }
                 return self.touched(false);
             }
             Msg::BarSpacing(v) => {
                 self.spacing = v.round();
                 let v = self.spacing as i64;
-                self.bar_mut().map(|d| d.set_bar("spacing", v));
+                if let Some(d) = self.bar_mut() {
+                    d.set_bar("spacing", v);
+                }
                 return self.touched(false);
             }
             // Not a color (yet): keep what's typed, don't write.
             Msg::BarBg(s) if !s.is_empty() && parse_hex(&s).is_none() => self.bar_bg = s,
             Msg::BarFg(s) if !s.is_empty() && parse_hex(&s).is_none() => self.bar_fg = s,
             Msg::BarBg(s) => {
-                self.bar_mut().map(|d| d.set_style("background", &s));
+                if let Some(d) = self.bar_mut() {
+                    d.set_style("background", &s);
+                }
                 self.bar_bg = s;
                 return self.touched(false);
             }
             Msg::BarFg(s) => {
-                self.bar_mut().map(|d| d.set_style("foreground", &s));
+                if let Some(d) = self.bar_mut() {
+                    d.set_style("foreground", &s);
+                }
                 self.bar_fg = s;
                 return self.touched(false);
             }
@@ -315,7 +348,11 @@ impl App for Appearance {
                 return self.write_sections();
             }
             Msg::MoveSide(s, i, right) if i < self.sections[s].len() => {
-                let to = if right { (s + 1).min(2) } else { s.saturating_sub(1) };
+                let to = if right {
+                    (s + 1).min(2)
+                } else {
+                    s.saturating_sub(1)
+                };
                 if to != s {
                     let m = self.sections[s].remove(i);
                     // Into the neighbouring section, next to where it was.
@@ -346,7 +383,9 @@ impl App for Appearance {
                     _ => kind.to_owned(),
                 };
                 if kind == "custom" {
-                    self.bar_mut().map(|d| d.set_module(&name, "text", "New"));
+                    if let Some(d) = self.bar_mut() {
+                        d.set_module(&name, "text", "New");
+                    }
                 }
                 self.sections[s].push(name.clone());
                 self.selected = Some(name);
@@ -366,7 +405,9 @@ impl App for Appearance {
                     return Task::none();
                 }
                 if let Some(name) = self.selected.clone() {
-                    self.bar_mut().map(|d| d.set_module(&name, key, &v));
+                    if let Some(d) = self.bar_mut() {
+                        d.set_module(&name, key, &v);
+                    }
                     return self.touched(false);
                 }
             }
@@ -383,7 +424,11 @@ impl App for Appearance {
                         errors.push(format!("bar: {e}"));
                     }
                 }
-                self.status = if errors.is_empty() { "Saved".into() } else { errors.join("; ") };
+                self.status = if errors.is_empty() {
+                    "Saved".into()
+                } else {
+                    errors.join("; ")
+                };
             }
             _ => {}
         }
@@ -394,8 +439,12 @@ impl App for Appearance {
         let nav = |label: &str, page: Page| {
             let l = label.to_owned();
             column(vec![
-                primary_button(&l, Msg::Page(page)).visible(move |s: &Appearance| s.page == page).fixed(36),
-                button(&l, Msg::Page(page)).visible(move |s: &Appearance| s.page != page).fixed(36),
+                primary_button(&l, Msg::Page(page))
+                    .visible(move |s: &Appearance| s.page == page)
+                    .fixed(36),
+                button(&l, Msg::Page(page))
+                    .visible(move |s: &Appearance| s.page != page)
+                    .fixed(36),
             ])
             .fixed(36)
             .spacing(0)
@@ -409,7 +458,10 @@ impl App for Appearance {
                 text(|s: &Appearance| s.status.clone()).fixed(24),
             ])
             .fixed(170),
-            column(vec![theme_page().visible(|s: &Appearance| s.page == Page::Theme), bar_page().visible(|s: &Appearance| s.page == Page::Bar)]),
+            column(vec![
+                theme_page().visible(|s: &Appearance| s.page == Page::Theme),
+                bar_page().visible(|s: &Appearance| s.page == Page::Bar),
+            ]),
         ])
         .padding(16)
         .spacing(20)
@@ -421,7 +473,12 @@ fn setting(name: &str, control: Element<Appearance, Msg>, width: i32) -> Element
     row(vec![label(name), control.fixed(width)]).fixed(34)
 }
 
-fn int_slider(name: &str, range: std::ops::RangeInclusive<f64>, get: fn(&Appearance) -> f64, msg: fn(f64) -> Msg) -> Element<Appearance, Msg> {
+fn int_slider(
+    name: &str,
+    range: std::ops::RangeInclusive<f64>,
+    get: fn(&Appearance) -> f64,
+    msg: fn(f64) -> Msg,
+) -> Element<Appearance, Msg> {
     row(vec![
         label(name).fixed(170),
         slider(range, get, msg),
@@ -447,38 +504,41 @@ fn color_u32(c: Color) -> u32 {
 
 /// The edited theme drawn as a small sample window.
 fn preview() -> Element<Appearance, Msg> {
-    canvas(|s: &Appearance| s.theme.clone(), |t: &Theme, x, y, w, h, _| {
-        let r = t.radius;
-        draw::set_draw_color(t.background);
-        draw::draw_rounded_rectf(x, y, w, h, r);
-        let (cx, cy, cw, ch) = (x + 14, y + 14, w - 28, h - 28);
-        draw::set_draw_color(t.surface);
-        draw::draw_rounded_rectf(cx, cy, cw, ch, r);
-        draw::set_font(heroui::fltk::enums::Font::HelveticaBold, t.font_size + 2);
-        draw::set_draw_color(t.text);
-        draw::draw_text2("Preview", cx + 14, cy + 10, cw - 28, 24, Align::Left);
-        draw::set_font(heroui::fltk::enums::Font::Helvetica, t.font_size - 2);
-        draw::set_draw_color(t.text_dim);
-        draw::draw_text2("Secondary text", cx + 14, cy + 34, cw - 28, 18, Align::Left);
-        // A primary and a normal button.
-        let by = cy + ch - 46;
-        draw::set_draw_color(t.accent);
-        draw::draw_rounded_rectf(cx + 14, by, 100, 32, r.min(16));
-        draw::set_font(heroui::fltk::enums::Font::Helvetica, t.font_size);
-        draw::set_draw_color(t.accent_text);
-        draw::draw_text2("Primary", cx + 14, by, 100, 32, Align::Center);
-        draw::set_draw_color(t.surface_alt);
-        draw::draw_rounded_rectf(cx + 124, by, 90, 32, r.min(16));
-        draw::set_draw_color(t.text);
-        draw::draw_text2("Button", cx + 124, by, 90, 32, Align::Center);
-        // A toggle, on.
-        let (tw, th) = (40, 22);
-        let (tx, ty) = (cx + cw - tw - 14, by + 5);
-        draw::set_draw_color(t.accent);
-        draw::draw_rounded_rectf(tx, ty, tw, th, th / 2);
-        draw::set_draw_color(t.accent_text);
-        draw::draw_pie(tx + tw - th + 3, ty + 3, th - 6, th - 6, 0.0, 360.0);
-    })
+    canvas(
+        |s: &Appearance| s.theme.clone(),
+        |t: &Theme, x, y, w, h, _| {
+            let r = t.radius;
+            draw::set_draw_color(t.background);
+            draw::draw_rounded_rectf(x, y, w, h, r);
+            let (cx, cy, cw, ch) = (x + 14, y + 14, w - 28, h - 28);
+            draw::set_draw_color(t.surface);
+            draw::draw_rounded_rectf(cx, cy, cw, ch, r);
+            draw::set_font(heroui::fltk::enums::Font::HelveticaBold, t.font_size + 2);
+            draw::set_draw_color(t.text);
+            draw::draw_text2("Preview", cx + 14, cy + 10, cw - 28, 24, Align::Left);
+            draw::set_font(heroui::fltk::enums::Font::Helvetica, t.font_size - 2);
+            draw::set_draw_color(t.text_dim);
+            draw::draw_text2("Secondary text", cx + 14, cy + 34, cw - 28, 18, Align::Left);
+            // A primary and a normal button.
+            let by = cy + ch - 46;
+            draw::set_draw_color(t.accent);
+            draw::draw_rounded_rectf(cx + 14, by, 100, 32, r.min(16));
+            draw::set_font(heroui::fltk::enums::Font::Helvetica, t.font_size);
+            draw::set_draw_color(t.accent_text);
+            draw::draw_text2("Primary", cx + 14, by, 100, 32, Align::Center);
+            draw::set_draw_color(t.surface_alt);
+            draw::draw_rounded_rectf(cx + 124, by, 90, 32, r.min(16));
+            draw::set_draw_color(t.text);
+            draw::draw_text2("Button", cx + 124, by, 90, 32, Align::Center);
+            // A toggle, on.
+            let (tw, th) = (40, 22);
+            let (tx, ty) = (cx + cw - tw - 14, by + 5);
+            draw::set_draw_color(t.accent);
+            draw::draw_rounded_rectf(tx, ty, tw, th, th / 2);
+            draw::set_draw_color(t.accent_text);
+            draw::draw_pie(tx + tw - th + 3, ty + 3, th - 6, th - 6, 0.0, 360.0);
+        },
+    )
 }
 
 fn theme_page() -> Element<Appearance, Msg> {
@@ -500,18 +560,51 @@ fn theme_page() -> Element<Appearance, Msg> {
             row(vec![
                 label(name),
                 swatch(move |s: &Appearance| color_u32(get(&s.theme))).fixed(34),
-                text_input(move |s: &Appearance| s.color_text[i].clone(), move |v| Msg::ColorText(i, v)).fixed(110),
+                text_input(
+                    move |s: &Appearance| s.color_text[i].clone(),
+                    move |v| Msg::ColorText(i, v),
+                )
+                .fixed(110),
             ])
             .fixed(34),
         );
     }
     rows.extend([
-        int_slider("Corner radius", 0.0..=20.0, |s| s.theme.radius as f64, Msg::Radius),
-        int_slider("Spacing", 0.0..=24.0, |s| s.theme.spacing as f64, Msg::Spacing),
-        int_slider("Card padding", 0.0..=32.0, |s| s.theme.padding as f64, Msg::Padding),
-        int_slider("Font size", 9.0..=22.0, |s| s.theme.font_size as f64, Msg::FontSize),
-        setting("Font (family name, empty = default)", text_input(|s: &Appearance| s.theme.font.clone(), Msg::Font), 200),
-        toggle("Animations", |s: &Appearance| s.theme.animations, Msg::Animations).fixed(30),
+        int_slider(
+            "Corner radius",
+            0.0..=20.0,
+            |s| s.theme.radius as f64,
+            Msg::Radius,
+        ),
+        int_slider(
+            "Spacing",
+            0.0..=24.0,
+            |s| s.theme.spacing as f64,
+            Msg::Spacing,
+        ),
+        int_slider(
+            "Card padding",
+            0.0..=32.0,
+            |s| s.theme.padding as f64,
+            Msg::Padding,
+        ),
+        int_slider(
+            "Font size",
+            9.0..=22.0,
+            |s| s.theme.font_size as f64,
+            Msg::FontSize,
+        ),
+        setting(
+            "Font (family name, empty = default)",
+            text_input(|s: &Appearance| s.theme.font.clone(), Msg::Font),
+            200,
+        ),
+        toggle(
+            "Animations",
+            |s: &Appearance| s.theme.animations,
+            Msg::Animations,
+        )
+        .fixed(30),
         caption("Off: changes happen instantly (reduced motion, saves battery).").fixed(20),
     ]);
     scroll(rows)
@@ -539,57 +632,120 @@ fn button_like_swatch(c: u32) -> Element<Appearance, Msg> {
 }
 
 fn module_row(s: usize, i: usize) -> Element<Appearance, Msg> {
-    let name = move |a: &Appearance| a.sections[s].get(i).map(|n| barconf::pretty(n)).unwrap_or_default();
+    let name = move |a: &Appearance| {
+        a.sections[s]
+            .get(i)
+            .map(|n| barconf::pretty(n))
+            .unwrap_or_default()
+    };
     row(vec![
         text(name),
-        button("↑", Msg::MoveUp(s, i)).fixed(36).enabled(move |_: &Appearance| i > 0),
-        button("↓", Msg::MoveDown(s, i)).fixed(36).enabled(move |a: &Appearance| i + 1 < a.sections[s].len()),
-        button("←", Msg::MoveSide(s, i, false)).fixed(36).enabled(move |_: &Appearance| s > 0),
-        button("→", Msg::MoveSide(s, i, true)).fixed(36).enabled(move |_: &Appearance| s < 2),
+        button("↑", Msg::MoveUp(s, i))
+            .fixed(36)
+            .enabled(move |_: &Appearance| i > 0),
+        button("↓", Msg::MoveDown(s, i))
+            .fixed(36)
+            .enabled(move |a: &Appearance| i + 1 < a.sections[s].len()),
+        button("←", Msg::MoveSide(s, i, false))
+            .fixed(36)
+            .enabled(move |_: &Appearance| s > 0),
+        button("→", Msg::MoveSide(s, i, true))
+            .fixed(36)
+            .enabled(move |_: &Appearance| s < 2),
         button("Edit", Msg::Select(s, i)).fixed(60),
         button("Remove", Msg::Remove(s, i)).fixed(80),
     ])
     .fixed(32)
 }
 
-const KIND_LABELS: &[&str] = &["Clock", "CPU", "Memory", "Battery", "Network", "Custom (text or command)"];
+const KIND_LABELS: &[&str] = &[
+    "Clock",
+    "CPU",
+    "Memory",
+    "Battery",
+    "Network",
+    "Custom (text or command)",
+];
 
 fn section(s: usize, title: &str) -> Vec<Element<Appearance, Msg>> {
     vec![
         label(title).fixed(28),
-        caption("No modules").fixed(20).visible(move |a: &Appearance| a.sections[s].is_empty()),
-        list(move |a: &Appearance| a.sections[s].len(), move |i| module_row(s, i)),
+        caption("No modules")
+            .fixed(20)
+            .visible(move |a: &Appearance| a.sections[s].is_empty()),
+        list(
+            move |a: &Appearance| a.sections[s].len(),
+            move |i| module_row(s, i),
+        ),
         row(vec![
-            dropdown(|_: &Appearance| KIND_LABELS, move |a: &Appearance| a.add_kind[s], move |k| Msg::AddKind(s, k)),
+            dropdown(
+                |_: &Appearance| KIND_LABELS,
+                move |a: &Appearance| a.add_kind[s],
+                move |k| Msg::AddKind(s, k),
+            ),
             button("Add", Msg::Add(s)).fixed(70),
         ])
         .fixed(34),
     ]
 }
 
-fn edit_field(name: &str, key: &'static str, get: fn(&ModuleEdit) -> String, shown: fn(&str) -> bool) -> Element<Appearance, Msg> {
+fn edit_field(
+    name: &str,
+    key: &'static str,
+    get: fn(&ModuleEdit) -> String,
+    shown: fn(&str) -> bool,
+) -> Element<Appearance, Msg> {
     row(vec![
         label(name).fixed(150),
-        text_input(move |a: &Appearance| get(&a.edit), move |v| Msg::Edit(key, v)),
+        text_input(
+            move |a: &Appearance| get(&a.edit),
+            move |v| Msg::Edit(key, v),
+        ),
     ])
     .fixed(34)
-    .visible(move |a: &Appearance| a.selected.as_deref().is_some_and(|n| shown(barconf::kind_of(n))))
+    .visible(move |a: &Appearance| {
+        a.selected
+            .as_deref()
+            .is_some_and(|n| shown(barconf::kind_of(n)))
+    })
 }
 
 fn bar_page() -> Element<Appearance, Msg> {
     let mut rows: Vec<Element<Appearance, Msg>> = vec![
         heading("Bar").fixed(36),
-        caption("HeroBar applies changes within a second. Comments in bar.toml are kept.").fixed(22),
+        caption("HeroBar applies changes within a second. Comments in bar.toml are kept.")
+            .fixed(22),
         text(|a: &Appearance| a.bar_error.clone().unwrap_or_default())
             .fixed(24)
             .visible(|a: &Appearance| a.bar_error.is_some()),
-        setting("Position", dropdown(|_: &Appearance| POSITIONS, |a: &Appearance| a.position, Msg::Position), 140),
+        setting(
+            "Position",
+            dropdown(
+                |_: &Appearance| POSITIONS,
+                |a: &Appearance| a.position,
+                Msg::Position,
+            ),
+            140,
+        ),
         int_slider("Height", 20.0..=64.0, |a| a.height, Msg::Height),
-        toggle("Reserve space (windows stay clear of the bar)", |a: &Appearance| a.reserve, Msg::Reserve).fixed(30),
+        toggle(
+            "Reserve space (windows stay clear of the bar)",
+            |a: &Appearance| a.reserve,
+            Msg::Reserve,
+        )
+        .fixed(30),
         int_slider("Edge padding", 0.0..=32.0, |a| a.padding, Msg::BarPadding),
         int_slider("Module spacing", 0.0..=24.0, |a| a.spacing, Msg::BarSpacing),
-        setting("Background (#rrggbb, empty = theme)", text_input(|a: &Appearance| a.bar_bg.clone(), Msg::BarBg), 120),
-        setting("Text color (#rrggbb, empty = theme)", text_input(|a: &Appearance| a.bar_fg.clone(), Msg::BarFg), 120),
+        setting(
+            "Background (#rrggbb, empty = theme)",
+            text_input(|a: &Appearance| a.bar_bg.clone(), Msg::BarBg),
+            120,
+        ),
+        setting(
+            "Text color (#rrggbb, empty = theme)",
+            text_input(|a: &Appearance| a.bar_fg.clone(), Msg::BarFg),
+            120,
+        ),
         heading("Modules").fixed(36),
     ];
     rows.extend(section(0, "Left"));
@@ -599,24 +755,51 @@ fn bar_page() -> Element<Appearance, Msg> {
     let any = |_: &str| true;
     let not_custom = |k: &str| k != "custom";
     rows.extend([
-        text(|a: &Appearance| a.selected.as_deref().map(|n| format!("Module: {}", barconf::pretty(n))).unwrap_or_default())
-            .fixed(36)
-            .visible(|a: &Appearance| a.selected.is_some()),
-        edit_field("Format", "format", |e| e.format.clone(), not_custom),
-        edit_field("When offline", "format-disconnected", |e| e.disconnected.clone(), |k| k == "network"),
-        edit_field("Text", "text", |e| e.text.clone(), |k| k == "custom"),
-        edit_field("Command (shows output)", "exec", |e| e.exec.clone(), |k| k == "custom"),
-        edit_field("Interval (seconds)", "interval", |e| e.interval.clone(), any),
-        edit_field("On click (command)", "on-click", |e| e.on_click.clone(), any),
-        text(|a: &Appearance| match a.selected.as_deref().map(barconf::kind_of) {
-            Some("clock") => "Format: strftime, e.g. %a %d %b  %H:%M".into(),
-            Some("cpu") => "Format placeholders: {usage}".into(),
-            Some("memory") => "Format placeholders: {used} {total} {percent}".into(),
-            Some("battery") => "Format placeholders: {capacity} {status}".into(),
-            Some("network") => "Format placeholders: {ifname} {state}".into(),
-            Some(_) => "Shows Text, or the first line the Command prints.".into(),
-            None => String::new(),
+        text(|a: &Appearance| {
+            a.selected
+                .as_deref()
+                .map(|n| format!("Module: {}", barconf::pretty(n)))
+                .unwrap_or_default()
         })
+        .fixed(36)
+        .visible(|a: &Appearance| a.selected.is_some()),
+        edit_field("Format", "format", |e| e.format.clone(), not_custom),
+        edit_field(
+            "When offline",
+            "format-disconnected",
+            |e| e.disconnected.clone(),
+            |k| k == "network",
+        ),
+        edit_field("Text", "text", |e| e.text.clone(), |k| k == "custom"),
+        edit_field(
+            "Command (shows output)",
+            "exec",
+            |e| e.exec.clone(),
+            |k| k == "custom",
+        ),
+        edit_field(
+            "Interval (seconds)",
+            "interval",
+            |e| e.interval.clone(),
+            any,
+        ),
+        edit_field(
+            "On click (command)",
+            "on-click",
+            |e| e.on_click.clone(),
+            any,
+        ),
+        text(
+            |a: &Appearance| match a.selected.as_deref().map(barconf::kind_of) {
+                Some("clock") => "Format: strftime, e.g. %a %d %b  %H:%M".into(),
+                Some("cpu") => "Format placeholders: {usage}".into(),
+                Some("memory") => "Format placeholders: {used} {total} {percent}".into(),
+                Some("battery") => "Format placeholders: {capacity} {status}".into(),
+                Some("network") => "Format placeholders: {ifname} {state}".into(),
+                Some(_) => "Shows Text, or the first line the Command prints.".into(),
+                None => String::new(),
+            },
+        )
         .fixed(24)
         .visible(|a: &Appearance| a.selected.is_some()),
         spacer().fixed(16),
@@ -625,6 +808,8 @@ fn bar_page() -> Element<Appearance, Msg> {
 }
 
 fn main() {
-    let settings = Settings::new("Appearance").size(820, 640).class("heroappearance");
+    let settings = Settings::new("Appearance")
+        .size(820, 640)
+        .class("heroappearance");
     heroui::run(Appearance::new(), settings).unwrap();
 }

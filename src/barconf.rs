@@ -65,7 +65,9 @@ impl BarDoc {
                 .and_then(|o| String::from_utf8(o.stdout).ok())
                 .unwrap_or_else(|| FALLBACK.to_owned()),
         };
-        let doc = text.parse::<DocumentMut>().map_err(|e| format!("{}: {e}", path.display()))?;
+        let doc = text
+            .parse::<DocumentMut>()
+            .map_err(|e| format!("{}: {e}", path.display()))?;
         Ok(BarDoc { path, doc })
     }
 
@@ -90,15 +92,28 @@ impl BarDoc {
     // --- [bar] -------------------------------------------------------------
 
     pub fn bar_str(&self, key: &str, default: &str) -> String {
-        self.doc.get("bar").and_then(|b| b.get(key)).and_then(|v| v.as_str()).unwrap_or(default).to_owned()
+        self.doc
+            .get("bar")
+            .and_then(|b| b.get(key))
+            .and_then(|v| v.as_str())
+            .unwrap_or(default)
+            .to_owned()
     }
 
     pub fn bar_int(&self, key: &str, default: i64) -> i64 {
-        self.doc.get("bar").and_then(|b| b.get(key)).and_then(|v| v.as_integer()).unwrap_or(default)
+        self.doc
+            .get("bar")
+            .and_then(|b| b.get(key))
+            .and_then(|v| v.as_integer())
+            .unwrap_or(default)
     }
 
     pub fn bar_bool(&self, key: &str, default: bool) -> bool {
-        self.doc.get("bar").and_then(|b| b.get(key)).and_then(|v| v.as_bool()).unwrap_or(default)
+        self.doc
+            .get("bar")
+            .and_then(|b| b.get(key))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(default)
     }
 
     pub fn set_bar(&mut self, key: &str, v: impl Into<toml_edit::Value>) {
@@ -110,7 +125,11 @@ impl BarDoc {
             .get("bar")
             .and_then(|b| b.get(key))
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -134,7 +153,12 @@ impl BarDoc {
     // --- [style] -----------------------------------------------------------
 
     pub fn style(&self, key: &str) -> String {
-        self.doc.get("style").and_then(|t| t.get(key)).and_then(|v| v.as_str()).unwrap_or("").to_owned()
+        self.doc
+            .get("style")
+            .and_then(|t| t.get(key))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned()
     }
 
     /// Empty removes the override (the theme's value is used).
@@ -150,13 +174,21 @@ impl BarDoc {
     // --- [modules."name"] --------------------------------------------------
 
     pub fn module_str(&self, name: &str, key: &str) -> String {
-        let item = self.doc.get("modules").and_then(|m| m.get(name)).and_then(|t| t.get(key));
+        let item = self
+            .doc
+            .get("modules")
+            .and_then(|m| m.get(name))
+            .and_then(|t| t.get(key));
         match item {
             Some(i) if i.is_str() => i.as_str().unwrap_or("").to_owned(),
             Some(i) if i.is_integer() => i.as_integer().unwrap_or(0).to_string(),
             Some(i) if i.is_float() => i.as_float().unwrap_or(0.0).to_string(),
             // on-click = { action = "run-command", arg = "..." }
-            Some(i) => i.get("arg").and_then(|a| a.as_str()).unwrap_or("").to_owned(),
+            Some(i) => i
+                .get("arg")
+                .and_then(|a| a.as_str())
+                .unwrap_or("")
+                .to_owned(),
             None => String::new(),
         }
     }
@@ -186,7 +218,10 @@ impl BarDoc {
     /// A name for a new custom module that isn't used yet.
     pub fn new_custom_name(&self) -> String {
         let used = |n: &str| self.doc.get("modules").is_some_and(|m| m.get(n).is_some());
-        (1..).map(|i| format!("custom/item{i}")).find(|n| !used(n)).expect("unbounded")
+        (1..)
+            .map(|i| format!("custom/item{i}"))
+            .find(|n| !used(n))
+            .expect("unbounded")
     }
 
     #[cfg(test)]
@@ -200,7 +235,11 @@ pub fn pretty(name: &str) -> String {
     if let Some(c) = name.strip_prefix("custom/") {
         return c.to_owned();
     }
-    KINDS.iter().find(|(k, _)| *k == name).map(|(_, l)| (*l).to_owned()).unwrap_or_else(|| name.to_owned())
+    KINDS
+        .iter()
+        .find(|(k, _)| *k == name)
+        .map(|(_, l)| (*l).to_owned())
+        .unwrap_or_else(|| name.to_owned())
 }
 
 pub fn kind_of(name: &str) -> &str {
@@ -216,7 +255,10 @@ mod tests {
     use super::*;
 
     fn doc(text: &str) -> BarDoc {
-        BarDoc { path: PathBuf::from("/nonexistent"), doc: text.parse().unwrap() }
+        BarDoc {
+            path: PathBuf::from("/nonexistent"),
+            doc: text.parse().unwrap(),
+        }
     }
 
     #[test]
@@ -228,10 +270,18 @@ mod tests {
         d.set_module("custom/a", "interval", "5");
         d.set_style("background", "#112233");
         let t = d.text();
-        assert!(t.contains("# top comment") && t.contains("# where") && t.contains("# mine"), "{t}");
+        assert!(
+            t.contains("# top comment") && t.contains("# where") && t.contains("# mine"),
+            "{t}"
+        );
         assert!(t.contains("position = \"bottom\""), "{t}");
         assert!(t.contains("modules-left = [\"cpu\", \"custom/a\"]"), "{t}");
-        assert!(t.contains("[modules.\"custom/a\"]") && t.contains("text = \"Hi\"") && t.contains("interval = 5"), "{t}");
+        assert!(
+            t.contains("[modules.\"custom/a\"]")
+                && t.contains("text = \"Hi\"")
+                && t.contains("interval = 5"),
+            "{t}"
+        );
         assert_eq!(d.module_str("custom/a", "interval"), "5");
         d.set_module("custom/a", "text", "");
         assert!(!d.text().contains("text = \"Hi\""));
@@ -239,7 +289,9 @@ mod tests {
 
     #[test]
     fn reads_action_tables() {
-        let d = doc("[modules.\"custom/x\"]\non-click = { action = \"run-command\", arg = \"foot\" }\n");
+        let d = doc(
+            "[modules.\"custom/x\"]\non-click = { action = \"run-command\", arg = \"foot\" }\n",
+        );
         assert_eq!(d.module_str("custom/x", "on-click"), "foot");
     }
 
