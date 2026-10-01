@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Appearance
+GenericName=Appearance Settings
+Comment=Customize colors, fonts, animations and the HeroBar
+Exec=heroappearance
+Icon=preferences-desktop-theme
+Terminal=false
+Categories=Settings;DesktopSettings;
+Keywords=theme;colors;accent;font;bar;panel;dark;light;animations;
+StartupWMClass=heroappearance
