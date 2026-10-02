@@ -4,6 +4,7 @@
 //! applies them within a second. bar.toml keeps its comments.
 
 mod barconf;
+mod layout;
 
 use std::time::Duration;
 
@@ -68,7 +69,8 @@ struct Appearance {
     bar_bg: String,
     bar_fg: String,
     sections: [Vec<String>; 3],
-    add_kind: [usize; 3],
+    add_kind: usize,
+    add_section: usize,
     /// The module whose settings are shown.
     selected: Option<String>,
     edit: ModuleEdit,
@@ -93,7 +95,7 @@ struct ModuleEdit {
 enum Msg {
     Page(Page),
     // Theme
-    Preset(bool),
+    Mode(heroui::theme::Mode),
     Accent(u32),
     ColorText(usize, String),
     Radius(f64),
@@ -110,13 +112,13 @@ enum Msg {
     BarSpacing(f64),
     BarBg(String),
     BarFg(String),
-    MoveUp(usize, usize),
-    MoveDown(usize, usize),
-    MoveSide(usize, usize, bool),
-    Remove(usize, usize),
+    /// Move module (section, index) to (section, index among the others).
+    MoveTo(usize, usize, usize, usize),
+    RemoveSelected,
     Select(usize, usize),
-    AddKind(usize, usize),
-    Add(usize),
+    AddKind(usize),
+    AddSection(usize),
+    Add,
     Edit(&'static str, String),
     // Saving
     Flush(u64),
@@ -158,7 +160,8 @@ impl Appearance {
             bar_bg: String::new(),
             bar_fg: String::new(),
             sections: Default::default(),
-            add_kind: [0; 3],
+            add_kind: 0,
+            add_section: 2,
             selected: None,
             edit: ModuleEdit::default(),
             theme_dirty: false,
@@ -198,9 +201,11 @@ impl Appearance {
         };
     }
 
-    /// Schedules a write ~300 ms after the last change.
+    /// Schedules a write ~300 ms after the last change. Theme edits also
+    /// apply to this window right away.
     fn touched(&mut self, theme: bool) -> Task<Msg> {
         if theme {
+            heroui::theme::set_current(self.theme.clone());
             self.theme_dirty = true;
         } else {
             self.bar_dirty = true;
@@ -211,6 +216,14 @@ impl Appearance {
             std::thread::sleep(Duration::from_millis(300));
             Msg::Flush(g)
         })
+    }
+
+    /// A new accent, with text on it kept readable.
+    fn set_accent(&mut self, c: Color) {
+        self.theme.accent = c;
+        self.theme.accent_text = heroui::theme::contrast_text(c);
+        self.color_text[0] = hex(c);
+        self.color_text[1] = hex(self.theme.accent_text);
     }
 
     fn bar_mut(&mut self) -> Option<&mut BarDoc> {
@@ -235,24 +248,32 @@ impl App for Appearance {
         match msg {
             Msg::Page(p) => self.page = p,
 
-            Msg::Preset(light) => {
-                let keep = (self.theme.font.clone(), self.theme.animations);
-                self.theme = if light { Theme::light() } else { Theme::dark() };
-                (self.theme.font, self.theme.animations) = keep;
-                self.color_text = COLORS
-                    .iter()
-                    .map(|(_, get, _)| hex(get(&self.theme)))
-                    .collect();
+            Msg::Mode(mode) => {
+                // A new base palette; the accent and the other settings stay.
+                let old = self.theme.clone();
+                self.theme = Theme::for_mode(mode);
+                self.theme.accent = old.accent;
+                self.theme.accent_text = heroui::theme::contrast_text(old.accent);
+                self.theme.radius = old.radius;
+                self.theme.spacing = old.spacing;
+                self.theme.padding = old.padding;
+                self.theme.font_size = old.font_size;
+                self.theme.font = old.font;
+                self.theme.animations = old.animations;
+                self.color_text = COLORS.iter().map(|(_, get, _)| hex(get(&self.theme))).collect();
                 return self.touched(true);
             }
             Msg::Accent(c) => {
-                self.theme.accent = Color::from_hex(c);
-                self.color_text[0] = hex(self.theme.accent);
+                self.set_accent(Color::from_hex(c));
                 return self.touched(true);
             }
             Msg::ColorText(i, s) => {
                 if let Some(c) = parse_hex(&s) {
-                    (COLORS[i].2)(&mut self.theme, c);
+                    if i == 0 {
+                        self.set_accent(c);
+                    } else {
+                        (COLORS[i].2)(&mut self.theme, c);
+                    }
                     self.color_text[i] = s;
                     return self.touched(true);
                 }
@@ -339,45 +360,36 @@ impl App for Appearance {
                 self.bar_fg = s;
                 return self.touched(false);
             }
-            Msg::MoveUp(s, i) if i > 0 && i < self.sections[s].len() => {
-                self.sections[s].swap(i, i - 1);
+            Msg::MoveTo(fs, fi, ts, ti) if fi < self.sections[fs].len() => {
+                let m = self.sections[fs].remove(fi);
+                let ti = ti.min(self.sections[ts].len());
+                self.sections[ts].insert(ti, m.clone());
+                self.selected = Some(m);
+                self.load_edit();
                 return self.write_sections();
             }
-            Msg::MoveDown(s, i) if i + 1 < self.sections[s].len() => {
-                self.sections[s].swap(i, i + 1);
-                return self.write_sections();
-            }
-            Msg::MoveSide(s, i, right) if i < self.sections[s].len() => {
-                let to = if right {
-                    (s + 1).min(2)
-                } else {
-                    s.saturating_sub(1)
-                };
-                if to != s {
-                    let m = self.sections[s].remove(i);
-                    // Into the neighbouring section, next to where it was.
-                    if right {
-                        self.sections[to].insert(0, m);
-                    } else {
-                        self.sections[to].push(m);
+            Msg::RemoveSelected => {
+                if let Some(name) = self.selected.take() {
+                    // The first occurrence; its [modules] settings stay in the
+                    // file, so re-adding it keeps them.
+                    for sec in self.sections.iter_mut() {
+                        if let Some(i) = sec.iter().position(|n| *n == name) {
+                            sec.remove(i);
+                            break;
+                        }
                     }
                     return self.write_sections();
                 }
-            }
-            Msg::Remove(s, i) if i < self.sections[s].len() => {
-                let m = self.sections[s].remove(i);
-                if self.selected.as_deref() == Some(m.as_str()) {
-                    self.selected = None;
-                }
-                return self.write_sections();
             }
             Msg::Select(s, i) => {
                 self.selected = self.sections[s].get(i).cloned();
                 self.load_edit();
             }
-            Msg::AddKind(s, k) => self.add_kind[s] = k,
-            Msg::Add(s) => {
-                let kind = KINDS[self.add_kind[s]].0;
+            Msg::AddKind(k) => self.add_kind = k,
+            Msg::AddSection(sec) => self.add_section = sec,
+            Msg::Add => {
+                let s = self.add_section;
+                let kind = KINDS[self.add_kind].0;
                 let name = match (kind, &self.bar) {
                     ("custom", Some(d)) => d.new_custom_name(),
                     _ => kind.to_owned(),
@@ -544,9 +556,16 @@ fn preview() -> Element<Appearance, Msg> {
 fn theme_page() -> Element<Appearance, Msg> {
     let mut rows: Vec<Element<Appearance, Msg>> = vec![
         heading("Theme").fixed(36),
-        caption("Used by every HeroUI program. HeroBar updates right away; other programs on their next start.").fixed(22),
+        caption("Used by every HeroUI program; open ones update right away.").fixed(22),
         preview().fixed(150),
-        row(vec![label("Preset"), button("Dark", Msg::Preset(false)).fixed(90), button("Light", Msg::Preset(true)).fixed(90)]).fixed(34),
+        row(vec![
+            label("Mode"),
+            mode_button("System", heroui::theme::Mode::System),
+            mode_button("Dark", heroui::theme::Mode::Dark),
+            mode_button("Light", heroui::theme::Mode::Light),
+        ])
+        .fixed(34),
+        caption("System follows your desktop's dark/light setting.").fixed(20),
         row(ACCENTS
             .iter()
             .map(|&c| button_like_swatch(c))
@@ -610,6 +629,16 @@ fn theme_page() -> Element<Appearance, Msg> {
     scroll(rows)
 }
 
+/// One option of the mode selector; the chosen one is highlighted.
+fn mode_button(name: &str, mode: heroui::theme::Mode) -> Element<Appearance, Msg> {
+    column(vec![
+        primary_button(name, Msg::Mode(mode)).visible(move |a: &Appearance| a.theme.mode == mode).fixed(34),
+        button(name, Msg::Mode(mode)).visible(move |a: &Appearance| a.theme.mode != mode).fixed(34),
+    ])
+    .spacing(0)
+    .fixed(90)
+}
+
 /// A clickable accent color swatch.
 fn button_like_swatch(c: u32) -> Element<Appearance, Msg> {
     Element::new(move |ctx| {
@@ -631,33 +660,6 @@ fn button_like_swatch(c: u32) -> Element<Appearance, Msg> {
     .fixed(34)
 }
 
-fn module_row(s: usize, i: usize) -> Element<Appearance, Msg> {
-    let name = move |a: &Appearance| {
-        a.sections[s]
-            .get(i)
-            .map(|n| barconf::pretty(n))
-            .unwrap_or_default()
-    };
-    row(vec![
-        text(name),
-        button("↑", Msg::MoveUp(s, i))
-            .fixed(36)
-            .enabled(move |_: &Appearance| i > 0),
-        button("↓", Msg::MoveDown(s, i))
-            .fixed(36)
-            .enabled(move |a: &Appearance| i + 1 < a.sections[s].len()),
-        button("←", Msg::MoveSide(s, i, false))
-            .fixed(36)
-            .enabled(move |_: &Appearance| s > 0),
-        button("→", Msg::MoveSide(s, i, true))
-            .fixed(36)
-            .enabled(move |_: &Appearance| s < 2),
-        button("Edit", Msg::Select(s, i)).fixed(60),
-        button("Remove", Msg::Remove(s, i)).fixed(80),
-    ])
-    .fixed(32)
-}
-
 const KIND_LABELS: &[&str] = &[
     "Clock",
     "CPU",
@@ -666,28 +668,6 @@ const KIND_LABELS: &[&str] = &[
     "Network",
     "Custom (text or command)",
 ];
-
-fn section(s: usize, title: &str) -> Vec<Element<Appearance, Msg>> {
-    vec![
-        label(title).fixed(28),
-        caption("No modules")
-            .fixed(20)
-            .visible(move |a: &Appearance| a.sections[s].is_empty()),
-        list(
-            move |a: &Appearance| a.sections[s].len(),
-            move |i| module_row(s, i),
-        ),
-        row(vec![
-            dropdown(
-                |_: &Appearance| KIND_LABELS,
-                move |a: &Appearance| a.add_kind[s],
-                move |k| Msg::AddKind(s, k),
-            ),
-            button("Add", Msg::Add(s)).fixed(70),
-        ])
-        .fixed(34),
-    ]
-}
 
 fn edit_field(
     name: &str,
@@ -748,9 +728,18 @@ fn bar_page() -> Element<Appearance, Msg> {
         ),
         heading("Modules").fixed(36),
     ];
-    rows.extend(section(0, "Left"));
-    rows.extend(section(1, "Center"));
-    rows.extend(section(2, "Right"));
+    rows.extend([
+        caption("Tap a module to edit it; drag it to move it, also between sections.").fixed(20),
+        layout::editor().fixed(76),
+        row(vec![
+            label("Add").fixed(40),
+            dropdown(|_: &Appearance| KIND_LABELS, |a: &Appearance| a.add_kind, Msg::AddKind),
+            label("to").fixed(24),
+            dropdown(|_: &Appearance| &layout::SECTION_NAMES[..], |a: &Appearance| a.add_section, Msg::AddSection).fixed(120),
+            primary_button("Add", Msg::Add).fixed(70),
+        ])
+        .fixed(34),
+    ]);
     // Settings of the selected module.
     let any = |_: &str| true;
     let not_custom = |k: &str| k != "custom";
@@ -763,6 +752,9 @@ fn bar_page() -> Element<Appearance, Msg> {
         })
         .fixed(36)
         .visible(|a: &Appearance| a.selected.is_some()),
+        row(vec![spacer(), button("Remove module", Msg::RemoveSelected).fixed(150)])
+            .fixed(34)
+            .visible(|a: &Appearance| a.selected.is_some()),
         edit_field("Format", "format", |e| e.format.clone(), not_custom),
         edit_field(
             "When offline",

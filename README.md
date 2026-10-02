@@ -3,15 +3,17 @@
 **Appearance**, the customization app of [HeroineOS](https://github.com/HeroineOS), built
 on [HeroUI](https://github.com/HeroineOS/HeroUI). It edits:
 
-- **The HeroUI theme**, used by every HeroUI program: colors (with a live preview, Dark/Light
-  presets and accent swatches), corner radius, spacing, padding, font and font size, and
-  animations (off = reduced motion, saves battery).
+- **The HeroUI theme**, used by every HeroUI program: mode (System follows the desktop's
+  dark/light setting, or Dark, or Light; switching keeps your accent), accent swatches,
+  every color, corner radius, spacing, padding, font and font size, and animations (off =
+  reduced motion, saves battery). Appearance and every open HeroUI program re-skin live.
 - **[HeroBar](https://github.com/HeroineOS/HeroBar)**: position, height, reserved space,
-  padding, spacing and colors, and the modules: add, remove, reorder, move between the
-  left/center/right sections, and edit each one (format, interval, text, command, on-click).
+  padding, spacing and colors, and the modules: a preview of the bar where you tap a module
+  to edit it and drag it to reorder it or move it between the left/center/right sections;
+  add and remove modules; edit each one (format, interval, text, command, on-click).
 
-Changes are saved ~300 ms after you stop editing, atomically. HeroBar applies them within
-a second; other HeroUI programs use the new theme on their next start. `bar.toml` keeps its
+Changes are saved ~300 ms after you stop editing, atomically. Open HeroUI programs re-skin
+right away; HeroBar applies layout changes within a second. `bar.toml` keeps its
 comments, so GUI and hand edits mix. It works on other distros too, e.g. to rice HeroBar on
 sway or Hyprland. System settings (network, displays, power...) belong to HeroSettings.
 
