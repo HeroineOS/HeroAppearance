@@ -22,12 +22,61 @@ const DRAG_START: i32 = 4;
 const CHIP_PAD: i32 = 12;
 const GAP: i32 = 6;
 
+type Chip3 = (String, String, String);
+
+/// Icon size in chips.
+const ICON: i32 = 16;
+const ICON_GAP: i32 = 5;
+
+/// Padding of icon-only chips.
+const COMPACT_PAD: i32 = 9;
+
+/// A chip's width for its label and icon; `compact` chips with an icon
+/// show only the icon.
+fn chip_width(label: &str, icon: &str, compact: bool) -> i32 {
+    if compact && !icon.is_empty() {
+        return ICON + 2 * COMPACT_PAD;
+    }
+    let icon = if icon.is_empty() { 0 } else { ICON + ICON_GAP };
+    draw::width(label).ceil() as i32 + icon + 2 * CHIP_PAD
+}
+
+/// Draws a chip's icon and label centered in (x, y, w, h).
+fn chip_content(label: &str, icon: &str, compact: bool, (x, y, w, h): (i32, i32, i32, i32), color: heroui::fltk::enums::Color) {
+    if compact && !icon.is_empty() {
+        heroui::icons::draw(icon, x + (w - ICON) / 2, y + (h - ICON) / 2, ICON, color);
+        return;
+    }
+    let content = chip_width(label, icon, false) - 2 * CHIP_PAD;
+    let mut cx = x + ((w - content) / 2).max(CHIP_PAD.min(w / 4));
+    draw::push_clip(x, y, w, h);
+    if !icon.is_empty() {
+        heroui::icons::draw(icon, cx, y + (h - ICON) / 2, ICON, color);
+        cx += ICON + ICON_GAP;
+    }
+    draw::set_draw_color(color);
+    draw::draw_text2(label, cx, y, x + w - cx, h, Align::Left | Align::Inside);
+    draw::pop_clip();
+}
+
 #[derive(Default)]
 struct State {
-    /// (config name, label) per section.
-    sections: [Vec<(String, String)>; 3],
+    /// (config name, label, icon) per section.
+    sections: [Vec<Chip3>; 3],
     selected: Option<String>,
     drag: Option<Drag>,
+    /// Icon-only chips, when full ones don't fit (see `fit`).
+    compact: std::cell::Cell<bool>,
+}
+
+impl State {
+    /// Picks full or icon-only chips for a bar `w` px wide.
+    fn fit(&self, w: i32) {
+        self.compact.set(false);
+        let widths = chip_widths(self, None);
+        let need: i32 = widths.iter().map(|ws| ws.iter().map(|(_, cw)| cw + GAP).sum::<i32>() + GAP * 2).sum();
+        self.compact.set(need > w);
+    }
 }
 
 struct Drag {
@@ -59,7 +108,7 @@ fn chip_widths(st: &State, skip: Option<(usize, usize)>) -> [Vec<(usize, i32)>; 
             .iter()
             .enumerate()
             .filter(|(i, _)| skip != Some((s, *i)))
-            .map(|(i, (_, label))| (i, draw::width(label).ceil() as i32 + 2 * CHIP_PAD))
+            .map(|(i, (_, label, icon))| (i, chip_width(label, icon, st.compact.get())))
             .collect()
     })
 }
@@ -128,6 +177,14 @@ fn drop_target(st: &State, x: i32, w: i32, px: i32, from: (usize, usize)) -> (us
     (s, before)
 }
 
+/// The icon a module shows: its own `icon`, else its kind's.
+fn chip_icon(a: &Appearance, name: &str) -> String {
+    a.bar
+        .as_ref()
+        .and_then(|d| d.module_icon(name))
+        .unwrap_or_else(|| barconf::default_icon(barconf::kind_of(name)).to_owned())
+}
+
 pub fn editor() -> Element<Appearance, Msg> {
     Element::new(|ctx| {
         let st: Rc<RefCell<State>> = Rc::default();
@@ -139,6 +196,8 @@ pub fn editor() -> Element<Appearance, Msg> {
                 let t = heroui::theme::current();
                 let st = st.borrow();
                 let (x, y, w, h) = (f.x(), f.y(), f.w(), f.h());
+                st.fit(w);
+                let compact = st.compact.get();
                 // The bar.
                 draw::set_draw_color(t.border);
                 draw::draw_rounded_rectf(x, y, w, h, t.radius.min(10));
@@ -161,14 +220,11 @@ pub fn editor() -> Element<Appearance, Msg> {
                 let (cy, ch) = (y + 8, h - 30);
                 draw::set_font(t.font(), t.font_size - 1);
                 for c in layout(&st, x, w, skip) {
-                    let (name, label) = &st.sections[c.section][c.index];
+                    let (name, label, icon) = &st.sections[c.section][c.index];
                     let selected = st.selected.as_deref() == Some(name.as_str());
                     draw::set_draw_color(if selected { t.accent } else { t.surface_alt });
                     draw::draw_rounded_rectf(c.x, cy, c.w, ch, t.radius.min(ch / 2));
-                    draw::set_draw_color(if selected { t.accent_text } else { t.text });
-                    draw::push_clip(c.x, cy, c.w, ch);
-                    draw::draw_text2(label, c.x, cy, c.w, ch, Align::Center);
-                    draw::pop_clip();
+                    chip_content(label, icon, compact, (c.x, cy, c.w, ch), if selected { t.accent_text } else { t.text });
                 }
                 // The dragged chip follows the pointer; a marker shows where
                 // it will land.
@@ -185,14 +241,13 @@ pub fn editor() -> Element<Appearance, Msg> {
                     };
                     draw::set_draw_color(t.accent);
                     draw::draw_rectf(mx, cy - 2, 3, ch + 4);
-                    let label = &st.sections[d.from.0][d.from.1].1;
-                    let cw = draw::width(label).ceil() as i32 + 2 * CHIP_PAD;
+                    let (_, label, icon) = &st.sections[d.from.0][d.from.1];
+                    let cw = chip_width(label, icon, compact);
                     let dx = (d.x - cw / 2).clamp(x, x + w - cw);
                     let _ = d.y;
                     draw::set_draw_color(t.accent);
                     draw::draw_rounded_rectf(dx, cy - 3, cw, ch, t.radius.min(ch / 2));
-                    draw::set_draw_color(t.accent_text);
-                    draw::draw_text2(label, dx, cy - 3, cw, ch, Align::Center);
+                    chip_content(label, icon, compact, (dx, cy - 3, cw, ch), t.accent_text);
                 }
             });
         }
@@ -204,6 +259,7 @@ pub fn editor() -> Element<Appearance, Msg> {
                 match ev {
                     Event::Push => {
                         let mut s = st.borrow_mut();
+                        s.fit(f.w());
                         let hit = layout(&s, f.x(), f.w(), None)
                             .into_iter()
                             .find(|c| px >= c.x && px < c.x + c.w && py >= f.y() + 4 && py < f.y() + f.h() - 20);
@@ -246,8 +302,8 @@ pub fn editor() -> Element<Appearance, Msg> {
         }
         let mut w = f.clone();
         ctx.bind(move |a: &Appearance| {
-            let sections: [Vec<(String, String)>; 3] = std::array::from_fn(|s| {
-                a.sections[s].iter().map(|n| (n.clone(), barconf::pretty(n))).collect()
+            let sections: [Vec<Chip3>; 3] = std::array::from_fn(|s| {
+                a.sections[s].iter().map(|n| (n.clone(), barconf::pretty(n), chip_icon(a, n))).collect()
             });
             let mut s = st.borrow_mut();
             if s.sections != sections || s.selected != a.selected {

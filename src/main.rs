@@ -56,8 +56,6 @@ const POSITIONS: &[&str] = &["Top", "Bottom"];
 struct Appearance {
     page: Page,
     theme: Theme,
-    /// What's typed in each color field (applied when it's a valid color).
-    color_text: Vec<String>,
     bar: Option<BarDoc>,
     bar_error: Option<String>,
     // [bar] values shown in the UI.
@@ -68,6 +66,8 @@ struct Appearance {
     spacing: f64,
     bar_bg: String,
     bar_fg: String,
+    islands: bool,
+    island_style: usize,
     sections: [Vec<String>; 3],
     add_kind: usize,
     add_section: usize,
@@ -89,7 +89,22 @@ struct ModuleEdit {
     text: String,
     exec: String,
     on_click: String,
+    /// As typed: "" = the kind's default, "none" = no icon.
+    icon: String,
+    // Taskbar
+    show: usize,
+    style: usize,
+    pinned: String,
+    max_width: f64,
+    fixed_width: bool,
+    button_width: f64,
 }
+
+const ISLAND_STYLES: &[&str] = &["Sharp", "Rounded", "Pill"];
+const TASK_SHOW: &[&str] = &["Pinned and running", "Running only", "Pinned only"];
+const TASK_SHOW_KEYS: [&str; 3] = ["both", "running", "pinned"];
+const TASK_STYLES: &[&str] = &["Icons (one per app)", "Icons and titles (one per window)"];
+const TASK_STYLE_KEYS: [&str; 2] = ["icons", "icons-titles"];
 
 #[derive(Clone)]
 enum Msg {
@@ -97,7 +112,7 @@ enum Msg {
     // Theme
     Mode(heroui::theme::Mode),
     Accent(u32),
-    ColorText(usize, String),
+    Color(usize, Color),
     Radius(f64),
     Spacing(f64),
     Padding(f64),
@@ -110,8 +125,17 @@ enum Msg {
     Reserve(bool),
     BarPadding(f64),
     BarSpacing(f64),
-    BarBg(String),
-    BarFg(String),
+    /// None: use the theme's.
+    BarBg(Option<Color>),
+    BarFg(Option<Color>),
+    Islands(bool),
+    IslandStyle(usize),
+    TaskShow(usize),
+    TaskStyle(usize),
+    Pinned(String),
+    MaxWidth(f64),
+    FixedWidth(bool),
+    ButtonWidth(f64),
     /// Move module (section, index) to (section, index among the others).
     MoveTo(usize, usize, usize, usize),
     RemoveSelected,
@@ -148,7 +172,6 @@ impl Appearance {
         };
         let mut a = Appearance {
             page: Page::Theme,
-            color_text: COLORS.iter().map(|(_, get, _)| hex(get(&theme))).collect(),
             theme,
             bar,
             bar_error,
@@ -159,6 +182,8 @@ impl Appearance {
             spacing: 4.0,
             bar_bg: String::new(),
             bar_fg: String::new(),
+            islands: false,
+            island_style: 1,
             sections: Default::default(),
             add_kind: 0,
             add_section: 2,
@@ -182,6 +207,12 @@ impl Appearance {
         self.spacing = d.bar_int("spacing", 4) as f64;
         self.bar_bg = d.style("background");
         self.bar_fg = d.style("foreground");
+        self.islands = d.bar_bool("islands", false);
+        self.island_style = match d.bar_str("island-style", "rounded").as_str() {
+            "sharp" => 0,
+            "pill" => 2,
+            _ => 1,
+        };
         for (i, key) in SECTIONS.iter().enumerate() {
             self.sections[i] = d.section(key);
         }
@@ -198,6 +229,17 @@ impl Appearance {
             text: d.module_str(name, "text"),
             exec: d.module_str(name, "exec"),
             on_click: d.module_str(name, "on-click"),
+            icon: match d.module_icon(name) {
+                None => String::new(),
+                Some(i) if i.is_empty() => "none".into(),
+                Some(i) => i,
+            },
+            show: TASK_SHOW_KEYS.iter().position(|k| *k == d.module_str(name, "show")).unwrap_or(0),
+            style: TASK_STYLE_KEYS.iter().position(|k| *k == d.module_str(name, "style")).unwrap_or(0),
+            pinned: d.module_list(name, "pinned").join(", "),
+            max_width: d.module_int(name, "max-width", 600) as f64,
+            fixed_width: d.module_bool(name, "fixed-width", false),
+            button_width: d.module_int(name, "button-width", 180) as f64,
         };
     }
 
@@ -222,8 +264,17 @@ impl Appearance {
     fn set_accent(&mut self, c: Color) {
         self.theme.accent = c;
         self.theme.accent_text = heroui::theme::contrast_text(c);
-        self.color_text[0] = hex(c);
-        self.color_text[1] = hex(self.theme.accent_text);
+    }
+
+    /// Writes a key of the selected module.
+    fn module_set(&mut self, key: &str, v: impl Into<toml_edit::Value>) -> Task<Msg> {
+        if let Some(name) = self.selected.clone() {
+            if let Some(d) = self.bar_mut() {
+                d.set_module_value(&name, key, v);
+            }
+            return self.touched(false);
+        }
+        Task::none()
     }
 
     fn bar_mut(&mut self) -> Option<&mut BarDoc> {
@@ -260,24 +311,20 @@ impl App for Appearance {
                 self.theme.font_size = old.font_size;
                 self.theme.font = old.font;
                 self.theme.animations = old.animations;
-                self.color_text = COLORS.iter().map(|(_, get, _)| hex(get(&self.theme))).collect();
+                self.theme.icon_theme = old.icon_theme;
                 return self.touched(true);
             }
             Msg::Accent(c) => {
                 self.set_accent(Color::from_hex(c));
                 return self.touched(true);
             }
-            Msg::ColorText(i, s) => {
-                if let Some(c) = parse_hex(&s) {
-                    if i == 0 {
-                        self.set_accent(c);
-                    } else {
-                        (COLORS[i].2)(&mut self.theme, c);
-                    }
-                    self.color_text[i] = s;
-                    return self.touched(true);
+            Msg::Color(i, c) => {
+                if i == 0 {
+                    self.set_accent(c);
+                } else {
+                    (COLORS[i].2)(&mut self.theme, c);
                 }
-                self.color_text[i] = s;
+                return self.touched(true);
             }
             Msg::Radius(v) => {
                 self.theme.radius = v.round() as i32;
@@ -343,22 +390,64 @@ impl App for Appearance {
                 }
                 return self.touched(false);
             }
-            // Not a color (yet): keep what's typed, don't write.
-            Msg::BarBg(s) if !s.is_empty() && parse_hex(&s).is_none() => self.bar_bg = s,
-            Msg::BarFg(s) if !s.is_empty() && parse_hex(&s).is_none() => self.bar_fg = s,
-            Msg::BarBg(s) => {
+            Msg::BarBg(c) => {
+                let s = c.map(hex).unwrap_or_default();
                 if let Some(d) = self.bar_mut() {
                     d.set_style("background", &s);
                 }
                 self.bar_bg = s;
                 return self.touched(false);
             }
-            Msg::BarFg(s) => {
+            Msg::BarFg(c) => {
+                let s = c.map(hex).unwrap_or_default();
                 if let Some(d) = self.bar_mut() {
                     d.set_style("foreground", &s);
                 }
                 self.bar_fg = s;
                 return self.touched(false);
+            }
+            Msg::Islands(on) => {
+                self.islands = on;
+                if let Some(d) = self.bar_mut() {
+                    d.set_bar("islands", on);
+                }
+                return self.touched(false);
+            }
+            Msg::IslandStyle(i) => {
+                self.island_style = i;
+                let v = ["sharp", "rounded", "pill"][i.min(2)];
+                if let Some(d) = self.bar_mut() {
+                    d.set_bar("island-style", v);
+                }
+                return self.touched(false);
+            }
+            Msg::TaskShow(i) => {
+                self.edit.show = i;
+                return self.module_set("show", TASK_SHOW_KEYS[i.min(2)]);
+            }
+            Msg::TaskStyle(i) => {
+                self.edit.style = i;
+                return self.module_set("style", TASK_STYLE_KEYS[i.min(1)]);
+            }
+            Msg::Pinned(text) => {
+                let mut list = toml_edit::Array::new();
+                for id in text.split([',', ' ']).map(str::trim).filter(|s| !s.is_empty()) {
+                    list.push(id);
+                }
+                self.edit.pinned = text;
+                return self.module_set("pinned", list);
+            }
+            Msg::MaxWidth(v) => {
+                self.edit.max_width = v.round();
+                return self.module_set("max-width", v.round() as i64);
+            }
+            Msg::FixedWidth(on) => {
+                self.edit.fixed_width = on;
+                return self.module_set("fixed-width", on);
+            }
+            Msg::ButtonWidth(v) => {
+                self.edit.button_width = v.round();
+                return self.module_set("button-width", v.round() as i64);
             }
             Msg::MoveTo(fs, fi, ts, ti) if fi < self.sections[fs].len() => {
                 let m = self.sections[fs].remove(fi);
@@ -411,7 +500,21 @@ impl App for Appearance {
                     "interval" => self.edit.interval = v.clone(),
                     "text" => self.edit.text = v.clone(),
                     "exec" => self.edit.exec = v.clone(),
+                    "icon" => self.edit.icon = v.clone(),
                     _ => self.edit.on_click = v.clone(),
+                }
+                if key == "icon" {
+                    // "" = the kind's default (no key), "none" = no icon.
+                    let name = self.selected.clone();
+                    if let (Some(name), Some(d)) = (name, self.bar_mut()) {
+                        match v.trim() {
+                            "" => d.remove_module_key(&name, "icon"),
+                            "none" => d.set_module(&name, "icon", ""),
+                            i => d.set_module(&name, "icon", i),
+                        }
+                        return self.touched(false);
+                    }
+                    return Task::none();
                 }
                 if key == "interval" && !v.trim().is_empty() && v.trim().parse::<f64>().is_err() {
                     return Task::none();
@@ -499,21 +602,6 @@ fn int_slider(
     .fixed(30)
 }
 
-fn swatch(c: impl Fn(&Appearance) -> u32 + 'static) -> Element<Appearance, Msg> {
-    canvas(c, |rgb: &u32, x, y, w, h, t: &Theme| {
-        let s = w.min(h) - 6;
-        draw::set_draw_color(t.border);
-        draw::draw_rounded_rectf(x + (w - s) / 2 - 1, y + (h - s) / 2 - 1, s + 2, s + 2, 6);
-        draw::set_draw_color(Color::from_hex(*rgb));
-        draw::draw_rounded_rectf(x + (w - s) / 2, y + (h - s) / 2, s, s, 5);
-    })
-}
-
-fn color_u32(c: Color) -> u32 {
-    let (r, g, b) = c.to_rgb();
-    (r as u32) << 16 | (g as u32) << 8 | b as u32
-}
-
 /// The edited theme drawn as a small sample window.
 fn preview() -> Element<Appearance, Msg> {
     canvas(
@@ -578,14 +666,10 @@ fn theme_page() -> Element<Appearance, Msg> {
         rows.push(
             row(vec![
                 label(name),
-                swatch(move |s: &Appearance| color_u32(get(&s.theme))).fixed(34),
-                text_input(
-                    move |s: &Appearance| s.color_text[i].clone(),
-                    move |v| Msg::ColorText(i, v),
-                )
-                .fixed(110),
+                caption_text(move |s: &Appearance| hex(get(&s.theme))).fixed(76),
+                color_button(move |s: &Appearance| get(&s.theme), move |c| Msg::Color(i, c)).fixed(44),
             ])
-            .fixed(34),
+            .fixed(36),
         );
     }
     rows.extend([
@@ -666,8 +750,37 @@ const KIND_LABELS: &[&str] = &[
     "Memory",
     "Battery",
     "Network",
+    "Volume",
+    "Taskbar (apps and windows)",
     "Custom (text or command)",
 ];
+
+/// Secondary (dim) text that changes with the state.
+fn caption_text(f: impl Fn(&Appearance) -> String + 'static) -> Element<Appearance, Msg> {
+    canvas(f, |s: &String, x, y, w, h, t: &Theme| {
+        draw::set_font(t.font(), t.font_size - 1);
+        draw::set_draw_color(t.text_dim);
+        draw::draw_text2(s, x, y, w, h, Align::Right | Align::Inside);
+    })
+}
+
+/// A bar color: the bar's own if set, else the theme's (shown, and
+/// "Theme" resets to it).
+fn bar_color(
+    name: &str,
+    own: fn(&Appearance) -> Option<Color>,
+    theme: fn(&Appearance) -> Color,
+    set: fn(Color) -> Msg,
+    reset: Msg,
+) -> Element<Appearance, Msg> {
+    row(vec![
+        label(name),
+        caption_text(move |a| if own(a).is_some() { String::new() } else { "from the theme".into() }).fixed(110),
+        button("Use theme", reset).fixed(110).visible(move |a: &Appearance| own(a).is_some()),
+        color_button(move |a: &Appearance| own(a).unwrap_or_else(|| theme(a)), set).fixed(44),
+    ])
+    .fixed(36)
+}
 
 fn edit_field(
     name: &str,
@@ -716,16 +829,32 @@ fn bar_page() -> Element<Appearance, Msg> {
         .fixed(30),
         int_slider("Edge padding", 0.0..=32.0, |a| a.padding, Msg::BarPadding),
         int_slider("Module spacing", 0.0..=24.0, |a| a.spacing, Msg::BarSpacing),
-        setting(
-            "Background (#rrggbb, empty = theme)",
-            text_input(|a: &Appearance| a.bar_bg.clone(), Msg::BarBg),
-            120,
+        bar_color(
+            "Background",
+            |a| parse_hex(&a.bar_bg),
+            |a| a.theme.background,
+            |c| Msg::BarBg(Some(c)),
+            Msg::BarBg(None),
         ),
-        setting(
-            "Text color (#rrggbb, empty = theme)",
-            text_input(|a: &Appearance| a.bar_fg.clone(), Msg::BarFg),
-            120,
+        bar_color(
+            "Text color",
+            |a| parse_hex(&a.bar_fg),
+            |a| a.theme.text,
+            |c| Msg::BarFg(Some(c)),
+            Msg::BarFg(None),
         ),
+        toggle(
+            "Islands (each module on its own background, see-through gaps)",
+            |a: &Appearance| a.islands,
+            Msg::Islands,
+        )
+        .fixed(30),
+        setting(
+            "Island corners",
+            dropdown(|_: &Appearance| ISLAND_STYLES, |a: &Appearance| a.island_style, Msg::IslandStyle),
+            140,
+        )
+        .visible(|a: &Appearance| a.islands),
         heading("Modules").fixed(36),
     ];
     rows.extend([
@@ -741,8 +870,9 @@ fn bar_page() -> Element<Appearance, Msg> {
         .fixed(34),
     ]);
     // Settings of the selected module.
-    let any = |_: &str| true;
-    let not_custom = |k: &str| k != "custom";
+    let not_taskbar = |k: &str| k != "taskbar";
+    let not_custom = |k: &str| k != "custom" && k != "taskbar";
+    let taskbar = |a: &Appearance| a.selected.as_deref().is_some_and(|n| barconf::kind_of(n) == "taskbar");
     rows.extend([
         text(|a: &Appearance| {
             a.selected
@@ -773,14 +903,59 @@ fn bar_page() -> Element<Appearance, Msg> {
             "Interval (seconds)",
             "interval",
             |e| e.interval.clone(),
-            any,
+            not_taskbar,
         ),
         edit_field(
             "On click (command)",
             "on-click",
             |e| e.on_click.clone(),
-            any,
+            not_taskbar,
         ),
+        row(vec![
+            label("Icon").fixed(150),
+            text_input(|a: &Appearance| a.edit.icon.clone(), |v| Msg::Edit("icon", v)),
+            icon(
+                |a: &Appearance| match a.edit.icon.as_str() {
+                    "" => barconf::default_icon(barconf::kind_of(a.selected.as_deref().unwrap_or(""))).to_owned(),
+                    "none" => String::new(),
+                    i => i.to_owned(),
+                },
+                20,
+            )
+            .fixed(34),
+        ])
+        .fixed(34)
+        .visible(move |a: &Appearance| !taskbar(a) && a.selected.is_some()),
+        caption("Icon: a built-in name (cpu, terminal, apps, power...), an app icon name or a file. Empty = default, none = no icon.")
+            .fixed(20)
+            .visible(move |a: &Appearance| !taskbar(a) && a.selected.is_some()),
+        setting(
+            "Show",
+            dropdown(|_: &Appearance| TASK_SHOW, |a: &Appearance| a.edit.show, Msg::TaskShow),
+            220,
+        )
+        .visible(taskbar),
+        setting(
+            "Buttons",
+            dropdown(|_: &Appearance| TASK_STYLES, |a: &Appearance| a.edit.style, Msg::TaskStyle),
+            260,
+        )
+        .visible(taskbar),
+        row(vec![
+            label("Pinned apps").fixed(150),
+            text_input(|a: &Appearance| a.edit.pinned.clone(), Msg::Pinned),
+        ])
+        .fixed(34)
+        .visible(taskbar),
+        caption("Pinned: .desktop file names, separated by commas (foot, firefox-esr).")
+            .fixed(20)
+            .visible(taskbar),
+        int_slider("Most room it takes", 100.0..=1600.0, |a| a.edit.max_width, Msg::MaxWidth).visible(taskbar),
+        toggle("Always take that room (other modules never move)", |a: &Appearance| a.edit.fixed_width, Msg::FixedWidth)
+            .fixed(30)
+            .visible(taskbar),
+        int_slider("Widest window button", 60.0..=400.0, |a| a.edit.button_width, Msg::ButtonWidth)
+            .visible(move |a: &Appearance| taskbar(a) && a.edit.style == 1),
         text(
             |a: &Appearance| match a.selected.as_deref().map(barconf::kind_of) {
                 Some("clock") => "Format: strftime, e.g. %a %d %b  %H:%M".into(),
@@ -788,6 +963,8 @@ fn bar_page() -> Element<Appearance, Msg> {
                 Some("memory") => "Format placeholders: {used} {total} {percent}".into(),
                 Some("battery") => "Format placeholders: {capacity} {status}".into(),
                 Some("network") => "Format placeholders: {ifname} {state}".into(),
+                Some("volume") => "Format placeholders: {volume}".into(),
+                Some("taskbar") => "Click: open or focus (again: next window); middle click: close.".into(),
                 Some(_) => "Shows Text, or the first line the Command prints.".into(),
                 None => String::new(),
             },

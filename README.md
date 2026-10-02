@@ -5,12 +5,14 @@ on [HeroUI](https://github.com/HeroineOS/HeroUI). It edits:
 
 - **The HeroUI theme**, used by every HeroUI program: mode (System follows the desktop's
   dark/light setting, or Dark, or Light; switching keeps your accent), accent swatches,
-  every color, corner radius, spacing, padding, font and font size, and animations (off =
+  every color (tap a color for a picker; a hex field is there for pasting), corner radius, spacing, padding, font and font size, and animations (off =
   reduced motion, saves battery). Appearance and every open HeroUI program re-skin live.
 - **[HeroBar](https://github.com/HeroineOS/HeroBar)**: position, height, reserved space,
-  padding, spacing and colors, and the modules: a preview of the bar where you tap a module
-  to edit it and drag it to reorder it or move it between the left/center/right sections;
-  add and remove modules; edit each one (format, interval, text, command, on-click).
+  padding, spacing, colors and islands (sharp, rounded or pill), and the modules: a preview
+  of the bar where you tap a module to edit it and drag it to reorder it or move it between
+  the left/center/right sections; add and remove modules; edit each one (format, interval,
+  text, command, on-click, icon), and the taskbar (pinned apps, per-app or per-window
+  buttons, width).
 
 Changes are saved ~300 ms after you stop editing, atomically. Open HeroUI programs re-skin
 right away; HeroBar applies layout changes within a second. `bar.toml` keeps its
@@ -32,7 +34,7 @@ Debian packages for amd64 and arm64 are on the
 [releases](https://github.com/HeroineOS/HeroAppearance/releases) page:
 
 ```sh
-sudo apt install ./heroappearance_0.1.1-1_arm64.deb
+sudo apt install ./heroappearance_0.1.2-1_arm64.deb
 ```
 
 It shows up as **Appearance** in application menus (`heroappearance` on the command line).

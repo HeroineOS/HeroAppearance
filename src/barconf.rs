@@ -28,14 +28,19 @@ format = "%a %d %b  %H:%M"
 pub const SECTIONS: [&str; 3] = ["modules-left", "modules-center", "modules-right"];
 
 /// Module kinds that can be added, as (config name, label).
-pub const KINDS: [(&str, &str); 6] = [
+pub const KINDS: [(&str, &str); 8] = [
     ("clock", "Clock"),
     ("cpu", "CPU"),
     ("memory", "Memory"),
     ("battery", "Battery"),
     ("network", "Network"),
+    ("volume", "Volume"),
+    ("taskbar", "Taskbar (apps and windows)"),
     ("custom", "Custom (text or command)"),
 ];
+
+/// Module keys stored as numbers.
+const NUMBER_KEYS: [&str; 3] = ["interval", "max-width", "button-width"];
 
 pub struct BarDoc {
     pub path: PathBuf,
@@ -202,9 +207,9 @@ impl BarDoc {
         }
         let t = modules[name].as_table_mut().expect("module is a table");
         let v = v.trim_end_matches('\n');
-        if v.trim().is_empty() {
+        if v.trim().is_empty() && key != "icon" {
             t.remove(key);
-        } else if key == "interval" {
+        } else if NUMBER_KEYS.contains(&key) {
             match v.trim().parse::<f64>() {
                 Ok(n) if n.fract() == 0.0 => t[key] = value(n as i64),
                 Ok(n) => t[key] = value(n),
@@ -213,6 +218,48 @@ impl BarDoc {
         } else {
             t[key] = value(v);
         }
+    }
+
+    /// Sets a module key to any TOML value (bools, numbers, lists).
+    pub fn set_module_value(&mut self, name: &str, key: &str, v: impl Into<toml_edit::Value>) {
+        let modules = self.table("modules");
+        modules.set_implicit(true);
+        if !modules.contains_key(name) {
+            modules[name] = Item::Table(Table::new());
+        }
+        modules[name][key] = value(v);
+    }
+
+    /// Removes a module key (the module's default applies).
+    pub fn remove_module_key(&mut self, name: &str, key: &str) {
+        if let Some(t) = self.doc.get_mut("modules").and_then(|m| m.get_mut(name)).and_then(|t| t.as_table_mut()) {
+            t.remove(key);
+        }
+    }
+
+    fn module_item(&self, name: &str, key: &str) -> Option<&Item> {
+        self.doc.get("modules").and_then(|m| m.get(name)).and_then(|t| t.get(key))
+    }
+
+    /// The module's `icon`: None if not set (the kind's default applies),
+    /// Some("") for no icon.
+    pub fn module_icon(&self, name: &str) -> Option<String> {
+        self.module_item(name, "icon").and_then(|i| i.as_str()).map(str::to_owned)
+    }
+
+    pub fn module_list(&self, name: &str, key: &str) -> Vec<String> {
+        self.module_item(name, key)
+            .and_then(|i| i.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+            .unwrap_or_default()
+    }
+
+    pub fn module_int(&self, name: &str, key: &str, default: i64) -> i64 {
+        self.module_item(name, key).and_then(|i| i.as_integer()).unwrap_or(default)
+    }
+
+    pub fn module_bool(&self, name: &str, key: &str, default: bool) -> bool {
+        self.module_item(name, key).and_then(|i| i.as_bool()).unwrap_or(default)
     }
 
     /// A name for a new custom module that isn't used yet.
@@ -238,8 +285,24 @@ pub fn pretty(name: &str) -> String {
     KINDS
         .iter()
         .find(|(k, _)| *k == name)
-        .map(|(_, l)| (*l).to_owned())
+        // Without the explanation in parentheses.
+        .map(|(_, l)| l.split(" (").next().unwrap_or(l).to_owned())
         .unwrap_or_else(|| name.to_owned())
+}
+
+/// The icon HeroBar shows for a module when its config doesn't set one
+/// (the layout editor shows the clock and taskbar ones too).
+pub fn default_icon(kind: &str) -> &'static str {
+    match kind {
+        "clock" => "clock",
+        "cpu" => "cpu",
+        "memory" => "memory",
+        "battery" => "battery-80",
+        "network" => "network-wireless",
+        "volume" => "volume-high",
+        "taskbar" => "app",
+        _ => "",
+    }
 }
 
 pub fn kind_of(name: &str) -> &str {
@@ -302,5 +365,25 @@ mod tests {
         assert_eq!(d.new_custom_name(), "custom/item1");
         assert_eq!(pretty("custom/menu"), "menu");
         assert_eq!(pretty("cpu"), "CPU");
+    }
+
+    #[test]
+    fn module_values() {
+        let mut d = doc("[modules.taskbar]\npinned = [\"foot\"]\n");
+        assert_eq!(d.module_list("taskbar", "pinned"), ["foot"]);
+        let mut a = Array::new();
+        a.push("foot");
+        a.push("firefox-esr");
+        d.set_module_value("taskbar", "pinned", a);
+        d.set_module_value("taskbar", "fixed-width", true);
+        d.set_module("taskbar", "max-width", "400");
+        assert_eq!(d.module_list("taskbar", "pinned"), ["foot", "firefox-esr"]);
+        assert!(d.module_bool("taskbar", "fixed-width", false));
+        assert_eq!(d.module_int("taskbar", "max-width", 600), 400);
+        assert_eq!(d.module_icon("cpu"), None);
+        d.set_module("cpu", "icon", "");
+        assert_eq!(d.module_icon("cpu").as_deref(), Some(""), "empty icon = none, kept");
+        d.remove_module_key("cpu", "icon");
+        assert_eq!(d.module_icon("cpu"), None);
     }
 }
