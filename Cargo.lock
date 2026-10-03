@@ -91,7 +91,7 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "heroappearance"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "heroui",
  "toml_edit",
@@ -99,8 +99,8 @@ dependencies = [
 
 [[package]]
 name = "heroui"
-version = "0.1.6"
-source = "git+https://github.com/HeroineOS/HeroUI#01ee0012f5e08529d711039a8d0504f2c87d982f"
+version = "0.1.7"
+source = "git+https://github.com/HeroineOS/HeroUI#527670efd7763b1fcb0f52fc2984531ba31a0889"
 dependencies = [
  "fltk",
  "fltk-sys",
