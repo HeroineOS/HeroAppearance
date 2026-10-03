@@ -28,13 +28,14 @@ format = "%a %d %b  %H:%M"
 pub const SECTIONS: [&str; 3] = ["modules-left", "modules-center", "modules-right"];
 
 /// Module kinds that can be added, as (config name, label).
-pub const KINDS: [(&str, &str); 11] = [
+pub const KINDS: [(&str, &str); 12] = [
     ("clock", "Clock"),
     ("cpu", "CPU"),
     ("memory", "Memory"),
     ("battery", "Battery"),
     ("network", "Network"),
     ("volume", "Volume"),
+    ("bluetooth", "Bluetooth"),
     ("taskbar", "Taskbar (apps and windows)"),
     ("workspaces", "Workspaces"),
     ("spacer", "Spacer (space, line or dots)"),
@@ -370,6 +371,7 @@ pub fn default_icon(kind: &str) -> &'static str {
         "battery" => "battery-80",
         "network" => "network-wireless",
         "volume" => "volume-high",
+        "bluetooth" => "bluetooth",
         "taskbar" => "app",
         "group" => "apps",
         _ => "",

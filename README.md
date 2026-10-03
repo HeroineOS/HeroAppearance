@@ -11,7 +11,8 @@ on [HeroUI](https://github.com/HeroineOS/HeroUI). It edits:
   padding, spacing, colors and islands (sharp, rounded or pill), and the modules: a preview
   of the bar where you tap a module to edit it and drag it to reorder it or move it between
   the left/center/right sections; add and remove modules; edit each one (format, interval,
-  text, command, on-click, icon, sizes), the taskbar (pinned apps, per-app or per-window
+  text, command, on-click, icon, sizes; network display presets; volume, network and
+  Bluetooth popups on or off), the taskbar (pinned apps, per-app or per-window
   buttons, width, current workspace only), workspaces, spacers (fixed or expanding, empty,
   line or dots), and groups (modules on one background, or a drawer): put modules in a
   group or take them out, add and edit members. Bar-wide font size, icon size, padding and
@@ -37,7 +38,7 @@ Debian packages for amd64 and arm64 are on the
 [releases](https://github.com/HeroineOS/HeroAppearance/releases) page:
 
 ```sh
-sudo apt install ./heroappearance_0.1.3-1_arm64.deb
+sudo apt install ./heroappearance_0.1.4-1_arm64.deb
 ```
 
 It shows up as **Appearance** in application menus (`heroappearance` on the command line).

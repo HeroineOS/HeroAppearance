@@ -121,11 +121,16 @@ struct ModuleEdit {
     members: Vec<String>,
     /// The group this module is in.
     in_group: Option<String>,
+    /// volume/network/bluetooth: a click opens the popup.
+    popup: bool,
     // Sizes; 0 = default
     padding: f64,
     icon_size: f64,
     font_size: f64,
 }
+
+const NET_SHOWS: &[&str] = &["Network name", "Name and speeds", "Speeds", "Data used", "Custom (Format below)"];
+const NET_FORMATS: [&str; 4] = ["{name}", "{name}  {down} {up}", "{down} {up}", "{down-total} {up-total}"];
 
 const SPACER_STYLES: &[&str] = &["Empty", "Line", "Dots"];
 const SPACER_STYLE_KEYS: [&str; 3] = ["none", "line", "dots"];
@@ -172,6 +177,8 @@ enum Msg {
     WsShow(usize),
     TaskWorkspace(usize),
     Drawer(bool),
+    Popup(bool),
+    NetShow(usize),
     JoinGroupPick(usize),
     /// Move the selected module into the picked group.
     JoinGroup,
@@ -317,6 +324,7 @@ impl Appearance {
             drawer: d.module_bool(name, "drawer", false),
             members: d.module_list(name, "modules"),
             in_group: d.groups().into_iter().find(|(_, m)| m.contains(name)).map(|(g, _)| g),
+            popup: d.module_bool(name, "popup", true),
             padding: d.module_int(name, "padding", 0) as f64,
             icon_size: d.module_int(name, "icon-size", 0) as f64,
             font_size: d.module_int(name, "font-size", 0) as f64,
@@ -571,6 +579,25 @@ impl App for Appearance {
             Msg::Drawer(on) => {
                 self.edit.drawer = on;
                 return self.module_set("drawer", on);
+            }
+            Msg::Popup(on) => {
+                self.edit.popup = on;
+                let name = self.selected.clone();
+                if let (Some(name), Some(d)) = (name, self.bar_mut()) {
+                    // On is the default: no key.
+                    if on {
+                        d.remove_module_key(&name, "popup");
+                    } else {
+                        d.set_module_value(&name, "popup", false);
+                    }
+                    return self.touched(false);
+                }
+            }
+            Msg::NetShow(i) => {
+                if let Some(f) = NET_FORMATS.get(i) {
+                    self.edit.format = (*f).to_owned();
+                    return self.module_set("format", *f);
+                }
             }
             Msg::JoinGroupPick(i) => self.join_group = i,
             Msg::JoinGroup => {
@@ -972,6 +999,7 @@ const KIND_LABELS: &[&str] = &[
     "Battery",
     "Network",
     "Volume",
+    "Bluetooth",
     "Taskbar (apps and windows)",
     "Workspaces",
     "Spacer (space, line or dots)",
@@ -1166,6 +1194,24 @@ fn bar_page() -> Element<Appearance, Msg> {
         caption("Icon: a built-in name (cpu, terminal, apps, power...), an app icon name or a file. Empty = default, none = no icon.")
             .fixed(20)
             .visible(move |a: &Appearance| (plain(a) || is("group")(a)) && a.selected.is_some()),
+        // Network
+        setting(
+            "Show",
+            dropdown(
+                |_: &Appearance| NET_SHOWS,
+                |a: &Appearance| NET_FORMATS.iter().position(|f| *f == a.edit.format || (a.edit.format.is_empty() && *f == "{name}")).unwrap_or(4),
+                Msg::NetShow,
+            ),
+            220,
+        )
+        .visible(is("network")),
+        // Popups
+        toggle("Click opens a popup (otherwise: runs On click)", |a: &Appearance| a.edit.popup, Msg::Popup)
+            .fixed(30)
+            .visible(|a: &Appearance| a.selected.as_deref().is_some_and(|n| matches!(barconf::kind_of(n), "volume" | "network" | "bluetooth"))),
+        caption("With the popup, On click is what its Advanced/settings button runs.")
+            .fixed(20)
+            .visible(|a: &Appearance| a.edit.popup && a.selected.as_deref().is_some_and(|n| matches!(barconf::kind_of(n), "volume" | "network" | "bluetooth"))),
         // Spacer
         int_slider("Width", 0.0..=200.0, |a| a.edit.width, Msg::SpacerWidth).visible(move |a: &Appearance| is("spacer")(a) && !a.edit.expand),
         toggle("Expand: share the free space (centers what's between)", |a: &Appearance| a.edit.expand, Msg::SpacerExpand)
@@ -1255,8 +1301,9 @@ fn bar_page() -> Element<Appearance, Msg> {
                 Some("cpu") => "Format placeholders: {usage}".into(),
                 Some("memory") => "Format placeholders: {used} {total} {percent}".into(),
                 Some("battery") => "Format placeholders: {capacity} {status}".into(),
-                Some("network") => "Format placeholders: {ifname} {state}".into(),
+                Some("network") => "Format: {name} {essid} {ifname} {signal} {down} {up} {down-total} {up-total}".into(),
                 Some("volume") => "Format placeholders: {volume}".into(),
+                Some("bluetooth") => "Format placeholders: {device} {count}".into(),
                 Some("taskbar") => "Click: open or focus (again: next window); middle click: close.".into(),
                 Some("workspaces") => "Click to switch; the mouse wheel steps through them.".into(),
                 Some("spacer") => "Expanding spacers center the modules between them and the section's edge.".into(),
