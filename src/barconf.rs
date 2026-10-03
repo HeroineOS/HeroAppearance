@@ -28,7 +28,7 @@ format = "%a %d %b  %H:%M"
 pub const SECTIONS: [&str; 3] = ["modules-left", "modules-center", "modules-right"];
 
 /// Module kinds that can be added, as (config name, label).
-pub const KINDS: [(&str, &str); 8] = [
+pub const KINDS: [(&str, &str); 11] = [
     ("clock", "Clock"),
     ("cpu", "CPU"),
     ("memory", "Memory"),
@@ -36,11 +36,14 @@ pub const KINDS: [(&str, &str); 8] = [
     ("network", "Network"),
     ("volume", "Volume"),
     ("taskbar", "Taskbar (apps and windows)"),
+    ("workspaces", "Workspaces"),
+    ("spacer", "Spacer (space, line or dots)"),
+    ("group", "Group (modules together, or a drawer)"),
     ("custom", "Custom (text or command)"),
 ];
 
 /// Module keys stored as numbers.
-const NUMBER_KEYS: [&str; 3] = ["interval", "max-width", "button-width"];
+const NUMBER_KEYS: [&str; 7] = ["interval", "max-width", "button-width", "width", "padding", "icon-size", "font-size"];
 
 pub struct BarDoc {
     pub path: PathBuf,
@@ -262,13 +265,71 @@ impl BarDoc {
         self.module_item(name, key).and_then(|i| i.as_bool()).unwrap_or(default)
     }
 
-    /// A name for a new custom module that isn't used yet.
-    pub fn new_custom_name(&self) -> String {
-        let used = |n: &str| self.doc.get("modules").is_some_and(|m| m.get(n).is_some());
-        (1..)
-            .map(|i| format!("custom/item{i}"))
-            .find(|n| !used(n))
-            .expect("unbounded")
+    /// Every module name in use: in the sections, in groups, or with a
+    /// [modules] section.
+    pub fn names(&self) -> Vec<String> {
+        let mut v: Vec<String> = SECTIONS.iter().flat_map(|k| self.section(k)).collect();
+        if let Some(m) = self.doc.get("modules").and_then(|m| m.as_table_like()) {
+            for (name, item) in m.iter() {
+                v.push(name.to_owned());
+                if let Some(a) = item.get("modules").and_then(|a| a.as_array()) {
+                    v.extend(a.iter().filter_map(|x| x.as_str().map(str::to_owned)));
+                }
+            }
+        }
+        v
+    }
+
+    /// A name for a new module of `kind` that isn't used yet: the kind
+    /// itself the first time ("cpu"), then "cpu/2", "cpu/3"... Custom
+    /// modules and groups always get a name ("custom/item1", "group/1").
+    pub fn new_name(&self, kind: &str) -> String {
+        let used = self.names();
+        let free = |n: &String| !used.contains(n);
+        match kind {
+            "custom" => (1..).map(|i| format!("custom/item{i}")).find(free),
+            "group" => (1..).map(|i| format!("group/{i}")).find(free),
+            k if free(&k.to_owned()) => Some(k.to_owned()),
+            k => (2..).map(|i| format!("{k}/{i}")).find(free),
+        }
+        .expect("unbounded")
+    }
+
+    /// The groups (names) and their modules.
+    pub fn groups(&self) -> Vec<(String, Vec<String>)> {
+        let mut v: Vec<(String, Vec<String>)> = Vec::new();
+        for name in self.names() {
+            if kind_of(&name) == "group" && !v.iter().any(|(g, _)| *g == name) {
+                let members = self.module_list(&name, "modules");
+                v.push((name, members));
+            }
+        }
+        v
+    }
+
+    pub fn set_module_list(&mut self, name: &str, key: &str, items: &[String]) {
+        let mut a = Array::new();
+        for i in items {
+            a.push(i.as_str());
+        }
+        self.set_module_value(name, key, a);
+    }
+
+    // --- [style] numbers ---------------------------------------------------
+
+    pub fn style_int(&self, key: &str) -> Option<i64> {
+        self.doc.get("style").and_then(|t| t.get(key)).and_then(|v| v.as_integer())
+    }
+
+    /// None removes the key (the default applies).
+    pub fn set_style_int(&mut self, key: &str, v: Option<i64>) {
+        let t = self.table("style");
+        match v {
+            Some(v) => t[key] = value(v),
+            None => {
+                t.remove(key);
+            }
+        }
     }
 
     #[cfg(test)]
@@ -277,17 +338,26 @@ impl BarDoc {
     }
 }
 
-/// "custom/menu" → "menu", "cpu" → "CPU".
+/// "custom/menu" → "menu", "cpu" → "CPU", "cpu/2" → "CPU 2",
+/// "group/system" → "system".
 pub fn pretty(name: &str) -> String {
-    if let Some(c) = name.strip_prefix("custom/") {
-        return c.to_owned();
+    let (kind, rest) = match name.split_once('/') {
+        Some((k, r)) => (k, Some(r)),
+        None => (name, None),
+    };
+    if let (Some(r), "custom" | "group") = (rest, kind) {
+        return r.to_owned();
     }
-    KINDS
+    let label = KINDS
         .iter()
-        .find(|(k, _)| *k == name)
+        .find(|(k, _)| *k == kind)
         // Without the explanation in parentheses.
         .map(|(_, l)| l.split(" (").next().unwrap_or(l).to_owned())
-        .unwrap_or_else(|| name.to_owned())
+        .unwrap_or_else(|| kind.to_owned());
+    match rest {
+        Some(r) => format!("{label} {r}"),
+        None => label,
+    }
 }
 
 /// The icon HeroBar shows for a module when its config doesn't set one
@@ -301,16 +371,14 @@ pub fn default_icon(kind: &str) -> &'static str {
         "network" => "network-wireless",
         "volume" => "volume-high",
         "taskbar" => "app",
+        "group" => "apps",
         _ => "",
     }
 }
 
+/// The kind of a module name: its part before any "/".
 pub fn kind_of(name: &str) -> &str {
-    if name.starts_with("custom/") {
-        "custom"
-    } else {
-        name
-    }
+    name.split('/').next().unwrap_or(name)
 }
 
 #[cfg(test)]
@@ -362,9 +430,16 @@ mod tests {
     fn fallback_parses_and_names() {
         let d = doc(FALLBACK);
         assert_eq!(d.section("modules-center"), ["clock"]);
-        assert_eq!(d.new_custom_name(), "custom/item1");
+        assert_eq!(d.new_name("custom"), "custom/item1");
+        assert_eq!(d.new_name("clock"), "clock/2");
+        assert_eq!(d.new_name("cpu"), "cpu/2");
+        assert_eq!(d.new_name("battery"), "battery");
+        assert_eq!(d.new_name("group"), "group/1");
         assert_eq!(pretty("custom/menu"), "menu");
         assert_eq!(pretty("cpu"), "CPU");
+        assert_eq!(pretty("cpu/2"), "CPU 2");
+        assert_eq!(pretty("group/system"), "system");
+        assert_eq!(kind_of("spacer/x"), "spacer");
     }
 
     #[test]

@@ -177,6 +177,15 @@ fn drop_target(st: &State, x: i32, w: i32, px: i32, from: (usize, usize)) -> (us
     (s, before)
 }
 
+/// A chip's label: short ones for spacers and workspaces.
+fn chip_label(name: &str) -> String {
+    match barconf::kind_of(name) {
+        "spacer" => "Space".into(),
+        "workspaces" => "1 2 3".into(),
+        _ => barconf::pretty(name),
+    }
+}
+
 /// The icon a module shows: its own `icon`, else its kind's.
 fn chip_icon(a: &Appearance, name: &str) -> String {
     a.bar
@@ -303,7 +312,7 @@ pub fn editor() -> Element<Appearance, Msg> {
         let mut w = f.clone();
         ctx.bind(move |a: &Appearance| {
             let sections: [Vec<Chip3>; 3] = std::array::from_fn(|s| {
-                a.sections[s].iter().map(|n| (n.clone(), barconf::pretty(n), chip_icon(a, n))).collect()
+                a.sections[s].iter().map(|n| (n.clone(), chip_label(n), chip_icon(a, n))).collect()
             });
             let mut s = st.borrow_mut();
             if s.sections != sections || s.selected != a.selected {

@@ -68,6 +68,17 @@ struct Appearance {
     bar_fg: String,
     islands: bool,
     island_style: usize,
+    /// [style] sizes; 0 = default.
+    style_padding: f64,
+    style_margin: f64,
+    style_icon: f64,
+    style_font: f64,
+    /// Groups and their modules.
+    groups: Vec<(String, Vec<String>)>,
+    /// Their names as shown.
+    group_labels: Vec<String>,
+    /// The group chosen in "Put in group".
+    join_group: usize,
     sections: [Vec<String>; 3],
     add_kind: usize,
     add_section: usize,
@@ -98,7 +109,28 @@ struct ModuleEdit {
     max_width: f64,
     fixed_width: bool,
     button_width: f64,
+    task_workspace: usize,
+    // Workspaces
+    ws_show: usize,
+    // Spacer
+    width: f64,
+    expand: bool,
+    spacer_style: usize,
+    // Group
+    drawer: bool,
+    members: Vec<String>,
+    /// The group this module is in.
+    in_group: Option<String>,
+    // Sizes; 0 = default
+    padding: f64,
+    icon_size: f64,
+    font_size: f64,
 }
+
+const SPACER_STYLES: &[&str] = &["Empty", "Line", "Dots"];
+const SPACER_STYLE_KEYS: [&str; 3] = ["none", "line", "dots"];
+const WS_SHOW: &[&str] = &["All", "With windows (and the shown one)"];
+const TASK_WS: &[&str] = &["All workspaces", "Current workspace only"];
 
 const ISLAND_STYLES: &[&str] = &["Sharp", "Rounded", "Pill"];
 const TASK_SHOW: &[&str] = &["Pinned and running", "Running only", "Pinned only"];
@@ -130,6 +162,27 @@ enum Msg {
     BarFg(Option<Color>),
     Islands(bool),
     IslandStyle(usize),
+    /// A [style] size (key, value; 0 = default).
+    StyleSize(&'static str, f64),
+    /// A size of the selected module (key, value; 0 = default).
+    ModSize(&'static str, f64),
+    SpacerWidth(f64),
+    SpacerExpand(bool),
+    SpacerStyle(usize),
+    WsShow(usize),
+    TaskWorkspace(usize),
+    Drawer(bool),
+    JoinGroupPick(usize),
+    /// Move the selected module into the picked group.
+    JoinGroup,
+    /// Move the selected module out of its group, after the group.
+    LeaveGroup,
+    /// Edit member `i` of the selected group.
+    EditMember(usize),
+    /// Back to the group of the selected member.
+    EditGroup,
+    /// Add a module of the "Add" kind to the selected group.
+    AddToGroup,
     TaskShow(usize),
     TaskStyle(usize),
     Pinned(String),
@@ -184,6 +237,13 @@ impl Appearance {
             bar_fg: String::new(),
             islands: false,
             island_style: 1,
+            style_padding: 0.0,
+            style_margin: 0.0,
+            style_icon: 0.0,
+            style_font: 0.0,
+            groups: Vec::new(),
+            group_labels: Vec::new(),
+            join_group: 0,
             sections: Default::default(),
             add_kind: 0,
             add_section: 2,
@@ -213,9 +273,18 @@ impl Appearance {
             "pill" => 2,
             _ => 1,
         };
+        // Unset sizes show what HeroBar uses then.
+        let size = |k: &str, default: i32| d.style_int(k).unwrap_or(default as i64) as f64;
+        let font = self.theme.font_size;
+        self.style_font = size("font-size", font);
+        self.style_icon = size("icon-size", self.style_font as i32 + 2);
+        self.style_padding = size("module-padding", 10);
+        self.style_margin = size("module-margin", 3);
         for (i, key) in SECTIONS.iter().enumerate() {
             self.sections[i] = d.section(key);
         }
+        self.groups = d.groups();
+        self.group_labels = self.groups.iter().map(|(g, _)| barconf::pretty(g)).collect();
     }
 
     fn load_edit(&mut self) {
@@ -240,6 +309,17 @@ impl Appearance {
             max_width: d.module_int(name, "max-width", 600) as f64,
             fixed_width: d.module_bool(name, "fixed-width", false),
             button_width: d.module_int(name, "button-width", 180) as f64,
+            task_workspace: usize::from(d.module_str(name, "workspace") == "current"),
+            ws_show: usize::from(d.module_str(name, "show") == "occupied"),
+            width: d.module_int(name, "width", 12) as f64,
+            expand: d.module_bool(name, "expand", false),
+            spacer_style: SPACER_STYLE_KEYS.iter().position(|k| *k == d.module_str(name, "style")).unwrap_or(0),
+            drawer: d.module_bool(name, "drawer", false),
+            members: d.module_list(name, "modules"),
+            in_group: d.groups().into_iter().find(|(_, m)| m.contains(name)).map(|(g, _)| g),
+            padding: d.module_int(name, "padding", 0) as f64,
+            icon_size: d.module_int(name, "icon-size", 0) as f64,
+            font_size: d.module_int(name, "font-size", 0) as f64,
         };
     }
 
@@ -266,6 +346,20 @@ impl Appearance {
         self.theme.accent_text = heroui::theme::contrast_text(c);
     }
 
+    /// Creates a module of the "Add" kind (with a fresh name) and returns
+    /// its name.
+    fn new_module(&mut self) -> Option<String> {
+        let kind = KINDS[self.add_kind].0;
+        let d = self.bar.as_mut()?;
+        let name = d.new_name(kind);
+        match kind {
+            "custom" => d.set_module(&name, "text", "New"),
+            "group" => d.set_module_list(&name, "modules", &[]),
+            _ => {}
+        }
+        Some(name)
+    }
+
     /// Writes a key of the selected module.
     fn module_set(&mut self, key: &str, v: impl Into<toml_edit::Value>) -> Task<Msg> {
         if let Some(name) = self.selected.clone() {
@@ -287,6 +381,10 @@ impl Appearance {
             for (i, key) in SECTIONS.iter().enumerate() {
                 d.set_section(key, &sections[i]);
             }
+        }
+        if let Some(d) = &self.bar {
+            self.groups = d.groups();
+            self.group_labels = self.groups.iter().map(|(g, _)| barconf::pretty(g)).collect();
         }
         self.touched(false)
     }
@@ -421,6 +519,126 @@ impl App for Appearance {
                 }
                 return self.touched(false);
             }
+            Msg::StyleSize(key, v) => {
+                let v = v.round();
+                match key {
+                    "module-padding" => self.style_padding = v,
+                    "module-margin" => self.style_margin = v,
+                    "icon-size" => self.style_icon = v,
+                    _ => self.style_font = v,
+                }
+                if let Some(d) = self.bar_mut() {
+                    d.set_style_int(key, Some(v as i64));
+                }
+                return self.touched(false);
+            }
+            Msg::ModSize(key, v) => {
+                let v = v.round();
+                match key {
+                    "padding" => self.edit.padding = v,
+                    "icon-size" => self.edit.icon_size = v,
+                    _ => self.edit.font_size = v,
+                }
+                if v <= 0.0 {
+                    let name = self.selected.clone();
+                    if let (Some(name), Some(d)) = (name, self.bar_mut()) {
+                        d.remove_module_key(&name, key);
+                    }
+                    return self.touched(false);
+                }
+                return self.module_set(key, v as i64);
+            }
+            Msg::SpacerWidth(v) => {
+                self.edit.width = v.round();
+                return self.module_set("width", v.round() as i64);
+            }
+            Msg::SpacerExpand(on) => {
+                self.edit.expand = on;
+                return self.module_set("expand", on);
+            }
+            Msg::SpacerStyle(i) => {
+                self.edit.spacer_style = i;
+                return self.module_set("style", SPACER_STYLE_KEYS[i.min(2)]);
+            }
+            Msg::WsShow(i) => {
+                self.edit.ws_show = i;
+                return self.module_set("show", if i == 1 { "occupied" } else { "all" });
+            }
+            Msg::TaskWorkspace(i) => {
+                self.edit.task_workspace = i;
+                return self.module_set("workspace", if i == 1 { "current" } else { "all" });
+            }
+            Msg::Drawer(on) => {
+                self.edit.drawer = on;
+                return self.module_set("drawer", on);
+            }
+            Msg::JoinGroupPick(i) => self.join_group = i,
+            Msg::JoinGroup => {
+                let (Some(name), Some((g, _))) = (self.selected.clone(), self.groups.get(self.join_group).cloned()) else {
+                    return Task::none();
+                };
+                // Out of its section, to the end of the group.
+                for sec in self.sections.iter_mut() {
+                    if let Some(i) = sec.iter().position(|n| *n == name) {
+                        sec.remove(i);
+                        break;
+                    }
+                }
+                if let Some(d) = self.bar_mut() {
+                    let mut members = d.module_list(&g, "modules");
+                    members.push(name);
+                    d.set_module_list(&g, "modules", &members);
+                }
+                let t = self.write_sections();
+                self.read_bar();
+                self.load_edit();
+                return t;
+            }
+            Msg::LeaveGroup => {
+                let (Some(name), Some(g)) = (self.selected.clone(), self.edit.in_group.clone()) else { return Task::none() };
+                if let Some(d) = self.bar_mut() {
+                    let mut members = d.module_list(&g, "modules");
+                    members.retain(|m| *m != name);
+                    d.set_module_list(&g, "modules", &members);
+                }
+                // Right after the group in its section.
+                let at = self.sections.iter().enumerate().find_map(|(s, sec)| sec.iter().position(|n| *n == g).map(|i| (s, i + 1)));
+                let (s, i) = at.unwrap_or((2, self.sections[2].len()));
+                self.sections[s].insert(i, name);
+                let t = self.write_sections();
+                self.read_bar();
+                self.load_edit();
+                return t;
+            }
+            Msg::EditMember(i) => {
+                if let Some(m) = self.edit.members.get(i).cloned() {
+                    self.selected = Some(m);
+                    self.load_edit();
+                }
+            }
+            Msg::EditGroup => {
+                if let Some(g) = self.edit.in_group.clone() {
+                    self.selected = Some(g);
+                    self.load_edit();
+                }
+            }
+            Msg::AddToGroup => {
+                let Some(g) = self.selected.clone() else { return Task::none() };
+                if KINDS[self.add_kind].0 == "group" {
+                    self.status = "Groups can't contain groups".into();
+                    return Task::none();
+                }
+                let Some(name) = self.new_module() else { return Task::none() };
+                if let Some(d) = self.bar_mut() {
+                    let mut members = d.module_list(&g, "modules");
+                    members.push(name.clone());
+                    d.set_module_list(&g, "modules", &members);
+                }
+                self.read_bar();
+                self.selected = Some(name);
+                self.load_edit();
+                return self.touched(false);
+            }
             Msg::TaskShow(i) => {
                 self.edit.show = i;
                 return self.module_set("show", TASK_SHOW_KEYS[i.min(2)]);
@@ -457,6 +675,18 @@ impl App for Appearance {
                 self.load_edit();
                 return self.write_sections();
             }
+            Msg::RemoveSelected if self.edit.in_group.is_some() => {
+                let (Some(name), Some(g)) = (self.selected.take(), self.edit.in_group.clone()) else { return Task::none() };
+                if let Some(d) = self.bar_mut() {
+                    let mut members = d.module_list(&g, "modules");
+                    members.retain(|m| *m != name);
+                    d.set_module_list(&g, "modules", &members);
+                }
+                self.selected = Some(g);
+                self.read_bar();
+                self.load_edit();
+                return self.touched(false);
+            }
             Msg::RemoveSelected => {
                 if let Some(name) = self.selected.take() {
                     // The first occurrence; its [modules] settings stay in the
@@ -478,16 +708,7 @@ impl App for Appearance {
             Msg::AddSection(sec) => self.add_section = sec,
             Msg::Add => {
                 let s = self.add_section;
-                let kind = KINDS[self.add_kind].0;
-                let name = match (kind, &self.bar) {
-                    ("custom", Some(d)) => d.new_custom_name(),
-                    _ => kind.to_owned(),
-                };
-                if kind == "custom" {
-                    if let Some(d) = self.bar_mut() {
-                        d.set_module(&name, "text", "New");
-                    }
-                }
+                let Some(name) = self.new_module() else { return Task::none() };
                 self.sections[s].push(name.clone());
                 self.selected = Some(name);
                 self.load_edit();
@@ -752,6 +973,9 @@ const KIND_LABELS: &[&str] = &[
     "Network",
     "Volume",
     "Taskbar (apps and windows)",
+    "Workspaces",
+    "Spacer (space, line or dots)",
+    "Group (modules together, or a drawer)",
     "Custom (text or command)",
 ];
 
@@ -855,6 +1079,11 @@ fn bar_page() -> Element<Appearance, Msg> {
             140,
         )
         .visible(|a: &Appearance| a.islands),
+        caption("Module sizes").fixed(24),
+        int_slider("Font size", 8.0..=28.0, |a| a.style_font, |v| Msg::StyleSize("font-size", v)),
+        int_slider("Icon size", 8.0..=40.0, |a| a.style_icon, |v| Msg::StyleSize("icon-size", v)),
+        int_slider("Padding inside", 0.0..=32.0, |a| a.style_padding, |v| Msg::StyleSize("module-padding", v)),
+        int_slider("Space above/below", 0.0..=16.0, |a| a.style_margin, |v| Msg::StyleSize("module-margin", v)),
         heading("Modules").fixed(36),
     ];
     rows.extend([
@@ -870,9 +1099,17 @@ fn bar_page() -> Element<Appearance, Msg> {
         .fixed(34),
     ]);
     // Settings of the selected module.
-    let not_taskbar = |k: &str| k != "taskbar";
-    let not_custom = |k: &str| k != "custom" && k != "taskbar";
+    let not_taskbar = |k: &str| !matches!(k, "taskbar" | "spacer" | "group" | "workspaces");
+    let not_custom = |k: &str| !matches!(k, "custom" | "taskbar" | "spacer" | "group" | "workspaces");
     let taskbar = |a: &Appearance| a.selected.as_deref().is_some_and(|n| barconf::kind_of(n) == "taskbar");
+    fn is(kind: &'static str) -> impl Fn(&Appearance) -> bool + Copy {
+        move |a: &Appearance| a.selected.as_deref().is_some_and(|n| barconf::kind_of(n) == kind)
+    }
+    let plain = |a: &Appearance| {
+        a.selected
+            .as_deref()
+            .is_some_and(|n| !matches!(barconf::kind_of(n), "taskbar" | "spacer" | "group" | "workspaces"))
+    };
     rows.extend([
         text(|a: &Appearance| {
             a.selected
@@ -925,10 +1162,64 @@ fn bar_page() -> Element<Appearance, Msg> {
             .fixed(34),
         ])
         .fixed(34)
-        .visible(move |a: &Appearance| !taskbar(a) && a.selected.is_some()),
+        .visible(move |a: &Appearance| (plain(a) || is("group")(a)) && a.selected.is_some()),
         caption("Icon: a built-in name (cpu, terminal, apps, power...), an app icon name or a file. Empty = default, none = no icon.")
             .fixed(20)
-            .visible(move |a: &Appearance| !taskbar(a) && a.selected.is_some()),
+            .visible(move |a: &Appearance| (plain(a) || is("group")(a)) && a.selected.is_some()),
+        // Spacer
+        int_slider("Width", 0.0..=200.0, |a| a.edit.width, Msg::SpacerWidth).visible(move |a: &Appearance| is("spacer")(a) && !a.edit.expand),
+        toggle("Expand: share the free space (centers what's between)", |a: &Appearance| a.edit.expand, Msg::SpacerExpand)
+            .fixed(30)
+            .visible(is("spacer")),
+        setting("Looks", dropdown(|_: &Appearance| SPACER_STYLES, |a: &Appearance| a.edit.spacer_style, Msg::SpacerStyle), 140)
+            .visible(is("spacer")),
+        // Workspaces
+        setting("Show", dropdown(|_: &Appearance| WS_SHOW, |a: &Appearance| a.edit.ws_show, Msg::WsShow), 300)
+            .visible(is("workspaces")),
+        // Group
+        toggle("Drawer: show only the icon until clicked", |a: &Appearance| a.edit.drawer, Msg::Drawer)
+            .fixed(30)
+            .visible(is("group")),
+        caption("Modules in this group:").fixed(24).visible(is("group")),
+        list(
+            |a: &Appearance| if is("group")(a) { a.edit.members.len() } else { 0 },
+            |i| {
+                row(vec![
+                    text(move |a: &Appearance| a.edit.members.get(i).map(|m| barconf::pretty(m)).unwrap_or_default()),
+                    button("Edit", Msg::EditMember(i)).fixed(80),
+                ])
+                .fixed(34)
+            },
+        ),
+        row(vec![
+            label("Add").fixed(40),
+            dropdown(|_: &Appearance| KIND_LABELS, |a: &Appearance| a.add_kind, Msg::AddKind),
+            primary_button("Add to group", Msg::AddToGroup).fixed(130),
+        ])
+        .fixed(34)
+        .visible(is("group")),
+        // Membership
+        row(vec![
+            label("Put in group").fixed(150),
+            dropdown(|a: &Appearance| &a.group_labels, |a: &Appearance| a.join_group, Msg::JoinGroupPick),
+            button("Move", Msg::JoinGroup).fixed(80),
+        ])
+        .fixed(34)
+        .visible(|a: &Appearance| {
+            a.edit.in_group.is_none() && !a.groups.is_empty() && a.selected.as_deref().is_some_and(|n| barconf::kind_of(n) != "group")
+        }),
+        row(vec![
+            text(|a: &Appearance| a.edit.in_group.as_deref().map(|g| format!("In group {}", barconf::pretty(g))).unwrap_or_default()),
+            button("Back to group", Msg::EditGroup).fixed(140),
+            button("Take out", Msg::LeaveGroup).fixed(110),
+        ])
+        .fixed(34)
+        .visible(|a: &Appearance| a.edit.in_group.is_some()),
+        // Sizes of this module
+        int_slider("Padding (0 = default)", 0.0..=32.0, |a| a.edit.padding, |v| Msg::ModSize("padding", v)).visible(plain),
+        int_slider("Icon size", 0.0..=40.0, |a| a.edit.icon_size, |v| Msg::ModSize("icon-size", v)).visible(plain),
+        int_slider("Font size", 0.0..=28.0, |a| a.edit.font_size, |v| Msg::ModSize("font-size", v))
+            .visible(move |a: &Appearance| plain(a) || is("workspaces")(a)),
         setting(
             "Show",
             dropdown(|_: &Appearance| TASK_SHOW, |a: &Appearance| a.edit.show, Msg::TaskShow),
@@ -954,6 +1245,8 @@ fn bar_page() -> Element<Appearance, Msg> {
         toggle("Always take that room (other modules never move)", |a: &Appearance| a.edit.fixed_width, Msg::FixedWidth)
             .fixed(30)
             .visible(taskbar),
+        setting("Windows from", dropdown(|_: &Appearance| TASK_WS, |a: &Appearance| a.edit.task_workspace, Msg::TaskWorkspace), 260)
+            .visible(taskbar),
         int_slider("Widest window button", 60.0..=400.0, |a| a.edit.button_width, Msg::ButtonWidth)
             .visible(move |a: &Appearance| taskbar(a) && a.edit.style == 1),
         text(
@@ -965,6 +1258,9 @@ fn bar_page() -> Element<Appearance, Msg> {
                 Some("network") => "Format placeholders: {ifname} {state}".into(),
                 Some("volume") => "Format placeholders: {volume}".into(),
                 Some("taskbar") => "Click: open or focus (again: next window); middle click: close.".into(),
+                Some("workspaces") => "Click to switch; the mouse wheel steps through them.".into(),
+                Some("spacer") => "Expanding spacers center the modules between them and the section's edge.".into(),
+                Some("group") => "One background for all its modules. Groups can't contain groups.".into(),
                 Some(_) => "Shows Text, or the first line the Command prints.".into(),
                 None => String::new(),
             },
