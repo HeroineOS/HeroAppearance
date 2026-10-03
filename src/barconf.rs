@@ -231,7 +231,12 @@ impl BarDoc {
         if !modules.contains_key(name) {
             modules[name] = Item::Table(Table::new());
         }
+        // Keep the comment after an existing value.
+        let decor = modules[name].get(key).and_then(|i| i.as_value()).map(|v| v.decor().clone());
         modules[name][key] = value(v);
+        if let (Some(d), Some(v)) = (decor, modules[name][key].as_value_mut()) {
+            *v.decor_mut() = d;
+        }
     }
 
     /// Removes a module key (the module's default applies).
@@ -249,6 +254,20 @@ impl BarDoc {
     /// Some("") for no icon.
     pub fn module_icon(&self, name: &str) -> Option<String> {
         self.module_item(name, "icon").and_then(|i| i.as_str()).map(str::to_owned)
+    }
+
+    /// True if the module sets `key` (even to "").
+    pub fn module_has(&self, name: &str, key: &str) -> bool {
+        self.module_item(name, key).is_some()
+    }
+
+    /// The taskbar's pinned apps and folders.
+    pub fn pinned(&self, name: &str) -> Vec<Pinned> {
+        self.module_item(name, "pinned").and_then(|i| i.as_array()).map(from_array).unwrap_or_default()
+    }
+
+    pub fn set_pinned(&mut self, name: &str, list: &[Pinned]) {
+        self.set_module_value(name, "pinned", to_array(list));
     }
 
     pub fn module_list(&self, name: &str, key: &str) -> Vec<String> {
@@ -337,6 +356,111 @@ impl BarDoc {
     pub fn text(&self) -> String {
         self.doc.to_string()
     }
+}
+
+/// A pinned app (desktop file name) or a folder (HeroBar's taskbar).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pinned {
+    App(String),
+    Folder { name: String, icon: Option<String>, apps: Vec<Pinned> },
+}
+
+fn from_array(a: &Array) -> Vec<Pinned> {
+    a.iter()
+        .filter_map(|v| match v {
+            toml_edit::Value::String(s) => Some(Pinned::App(s.value().clone())),
+            toml_edit::Value::InlineTable(t) => Some(Pinned::Folder {
+                name: t.get("folder").and_then(|v| v.as_str()).unwrap_or("Folder").to_owned(),
+                icon: t.get("icon").and_then(|v| v.as_str()).map(str::to_owned),
+                apps: t.get("apps").and_then(|v| v.as_array()).map(from_array).unwrap_or_default(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+fn to_array(list: &[Pinned]) -> Array {
+    let mut a = Array::new();
+    for p in list {
+        match p {
+            Pinned::App(id) => a.push(id.as_str()),
+            Pinned::Folder { name, icon, apps } => {
+                let mut t = toml_edit::InlineTable::new();
+                t.insert("folder", name.as_str().into());
+                if let Some(i) = icon {
+                    t.insert("icon", i.as_str().into());
+                }
+                t.insert("apps", toml_edit::Value::Array(to_array(apps)));
+                a.push(t);
+            }
+        }
+    }
+    a
+}
+
+/// The icon of app `id` from its .desktop file (`Icon=`), else `id`.
+pub fn app_icon(id: &str) -> String {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut dirs: Vec<PathBuf> = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).into_iter().collect();
+    if dirs.is_empty() {
+        dirs.extend(home.map(|h| h.join(".local/share")));
+    }
+    let sys = std::env::var("XDG_DATA_DIRS").unwrap_or_default();
+    let sys = if sys.is_empty() { "/usr/local/share:/usr/share".to_owned() } else { sys };
+    dirs.extend(sys.split(':').filter(|s| !s.is_empty()).map(PathBuf::from));
+    for d in dirs {
+        if let Ok(text) = std::fs::read_to_string(d.join("applications").join(format!("{id}.desktop"))) {
+            if let Some(icon) = text.lines().find_map(|l| l.strip_prefix("Icon=")) {
+                return icon.trim().to_owned();
+            }
+        }
+    }
+    id.to_owned()
+}
+
+/// A pinned entry: indexes down the folders.
+pub type PinPath = Vec<usize>;
+
+/// Every entry, depth first: (path, depth).
+pub fn flatten(list: &[Pinned]) -> Vec<(PinPath, usize)> {
+    fn walk(list: &[Pinned], path: &mut PinPath, out: &mut Vec<(PinPath, usize)>) {
+        for (i, p) in list.iter().enumerate() {
+            path.push(i);
+            out.push((path.clone(), path.len() - 1));
+            if let Pinned::Folder { apps, .. } = p {
+                walk(apps, path, out);
+            }
+            path.pop();
+        }
+    }
+    let mut out = Vec::new();
+    walk(list, &mut Vec::new(), &mut out);
+    out
+}
+
+/// The list holding the entry at `path`, and its index there.
+pub fn parent_mut<'a>(list: &'a mut Vec<Pinned>, path: &[usize]) -> Option<(&'a mut Vec<Pinned>, usize)> {
+    let (&last, folders) = path.split_last()?;
+    let mut cur = list;
+    for &i in folders {
+        cur = match cur.get_mut(i)? {
+            Pinned::Folder { apps, .. } => apps,
+            Pinned::App(_) => return None,
+        };
+    }
+    (last < cur.len()).then_some((cur, last))
+}
+
+pub fn get<'a>(list: &'a [Pinned], path: &[usize]) -> Option<&'a Pinned> {
+    let (&last, folders) = path.split_last()?;
+    let mut cur = list;
+    for &i in folders {
+        cur = match cur.get(i)? {
+            Pinned::Folder { apps, .. } => apps,
+            Pinned::App(_) => return None,
+        };
+    }
+    cur.get(last)
 }
 
 /// "custom/menu" → "menu", "cpu" → "CPU", "cpu/2" → "CPU 2",
@@ -445,6 +569,16 @@ mod tests {
     }
 
     #[test]
+    fn pinned_round_trip() {
+        let mut d = doc("[modules.taskbar]\npinned = [\"foot\", { folder = \"Games\", apps = [\"steam\", { folder = \"Emu\", icon = \"x\", apps = [] }] }]\n");
+        let p = d.pinned("taskbar");
+        assert_eq!(flatten(&p).len(), 4);
+        assert!(matches!(get(&p, &[1, 1]), Some(Pinned::Folder { icon: Some(i), .. }) if i == "x"));
+        d.set_pinned("taskbar", &p);
+        assert_eq!(d.pinned("taskbar"), p);
+    }
+
+    #[test]
     fn module_values() {
         let mut d = doc("[modules.taskbar]\npinned = [\"foot\"]\n");
         assert_eq!(d.module_list("taskbar", "pinned"), ["foot"]);
@@ -452,6 +586,7 @@ mod tests {
         a.push("foot");
         a.push("firefox-esr");
         d.set_module_value("taskbar", "pinned", a);
+        assert!(d.text().contains("[\"foot\", \"firefox-esr\"]"));
         d.set_module_value("taskbar", "fixed-width", true);
         d.set_module("taskbar", "max-width", "400");
         assert_eq!(d.module_list("taskbar", "pinned"), ["foot", "firefox-esr"]);

@@ -105,7 +105,15 @@ struct ModuleEdit {
     // Taskbar
     show: usize,
     style: usize,
-    pinned: String,
+    pinned: Vec<barconf::Pinned>,
+    /// The selected pinned entry (row of the flattened tree).
+    pin_sel: Option<usize>,
+    /// Typed in "Add app".
+    pin_new: String,
+    /// Details on hover.
+    tooltip: bool,
+    /// Clock calendar: weeks start on Sunday.
+    sunday_first: bool,
     max_width: f64,
     fixed_width: bool,
     button_width: f64,
@@ -129,8 +137,21 @@ struct ModuleEdit {
     font_size: f64,
 }
 
-const NET_SHOWS: &[&str] = &["Network name", "Name and speeds", "Speeds", "Data used", "Custom (Format below)"];
-const NET_FORMATS: [&str; 4] = ["{name}", "{name}  {down} {up}", "{down} {up}", "{down-total} {up-total}"];
+const NET_SHOWS: &[&str] = &[
+    "Network name",
+    "Name and speeds",
+    "Speeds",
+    "Data used",
+    "Icon only (signal strength / wired)",
+    "Custom (Format below)",
+];
+const NET_FORMATS: [&str; 5] = [
+    "{name}",
+    "{name}  {icon:arrow-down}{down} {icon:arrow-up}{up}",
+    "{icon:arrow-down}{down} {icon:arrow-up}{up}",
+    "{icon:arrow-down}{down-total} {icon:arrow-up}{up-total}",
+    "",
+];
 
 const SPACER_STYLES: &[&str] = &["Empty", "Line", "Dots"];
 const SPACER_STYLE_KEYS: [&str; 3] = ["none", "line", "dots"];
@@ -188,11 +209,28 @@ enum Msg {
     EditMember(usize),
     /// Back to the group of the selected member.
     EditGroup,
+    /// Edit the module with this name (from the group chips).
+    SelectName(String),
     /// Add a module of the "Add" kind to the selected group.
     AddToGroup,
     TaskShow(usize),
     TaskStyle(usize),
-    Pinned(String),
+    PinSel(usize),
+    /// Move the selected pinned entry up (-1) or down (1) among its siblings.
+    PinMove(i32),
+    /// Into the folder just above it.
+    PinIn,
+    /// Out of its folder.
+    PinOut,
+    PinRemove,
+    PinNewText(String),
+    /// Add the typed app (into the selected folder, if one is).
+    PinAdd,
+    PinNewFolder,
+    FolderName(String),
+    FolderIcon(String),
+    Tooltip(bool),
+    SundayFirst(bool),
     MaxWidth(f64),
     FixedWidth(bool),
     ButtonWidth(f64),
@@ -299,7 +337,12 @@ impl Appearance {
             return;
         };
         self.edit = ModuleEdit {
-            format: d.module_str(name, "format"),
+            // An unset network format shows the name; set to "" it's icon-only.
+            format: if barconf::kind_of(name) == "network" && !d.module_has(name, "format") {
+                "{name}".into()
+            } else {
+                d.module_str(name, "format")
+            },
             disconnected: d.module_str(name, "format-disconnected"),
             interval: d.module_str(name, "interval"),
             text: d.module_str(name, "text"),
@@ -312,7 +355,11 @@ impl Appearance {
             },
             show: TASK_SHOW_KEYS.iter().position(|k| *k == d.module_str(name, "show")).unwrap_or(0),
             style: TASK_STYLE_KEYS.iter().position(|k| *k == d.module_str(name, "style")).unwrap_or(0),
-            pinned: d.module_list(name, "pinned").join(", "),
+            pinned: d.pinned(name),
+            pin_sel: None,
+            pin_new: String::new(),
+            tooltip: d.module_bool(name, "tooltip", true),
+            sunday_first: d.module_str(name, "first-weekday") == "sunday",
             max_width: d.module_int(name, "max-width", 600) as f64,
             fixed_width: d.module_bool(name, "fixed-width", false),
             button_width: d.module_int(name, "button-width", 180) as f64,
@@ -643,6 +690,10 @@ impl App for Appearance {
                     self.load_edit();
                 }
             }
+            Msg::SelectName(n) => {
+                self.selected = Some(n);
+                self.load_edit();
+            }
             Msg::EditGroup => {
                 if let Some(g) = self.edit.in_group.clone() {
                     self.selected = Some(g);
@@ -674,13 +725,116 @@ impl App for Appearance {
                 self.edit.style = i;
                 return self.module_set("style", TASK_STYLE_KEYS[i.min(1)]);
             }
-            Msg::Pinned(text) => {
-                let mut list = toml_edit::Array::new();
-                for id in text.split([',', ' ']).map(str::trim).filter(|s| !s.is_empty()) {
-                    list.push(id);
+            Msg::PinSel(k) => self.edit.pin_sel = Some(k),
+            Msg::PinNewText(t) => self.edit.pin_new = t,
+            Msg::Tooltip(on) => {
+                self.edit.tooltip = on;
+                return self.module_set("tooltip", on);
+            }
+            Msg::SundayFirst(on) => {
+                self.edit.sunday_first = on;
+                return self.module_set("first-weekday", if on { "sunday" } else { "monday" });
+            }
+            Msg::PinMove(_) | Msg::PinIn | Msg::PinOut | Msg::PinRemove | Msg::PinAdd | Msg::PinNewFolder | Msg::FolderName(_) | Msg::FolderIcon(_) => {
+                let rows = barconf::flatten(&self.edit.pinned);
+                let sel = self.edit.pin_sel.and_then(|k| rows.get(k)).map(|(p, _)| p.clone());
+                let list = &mut self.edit.pinned;
+                // The entry to select afterwards.
+                let mut after = sel.clone();
+                match (msg, sel) {
+                    (Msg::PinMove(d), Some(p)) => {
+                        if let Some((parent, i)) = barconf::parent_mut(list, &p) {
+                            let j = i as i32 + d;
+                            if j >= 0 && (j as usize) < parent.len() {
+                                parent.swap(i, j as usize);
+                                let mut np = p.clone();
+                                *np.last_mut().expect("non-empty") = j as usize;
+                                after = Some(np);
+                            }
+                        }
+                    }
+                    (Msg::PinIn, Some(p)) => {
+                        let i = *p.last().expect("non-empty");
+                        if i > 0 {
+                            let mut above = p.clone();
+                            *above.last_mut().expect("non-empty") = i - 1;
+                            if matches!(barconf::get(list, &above), Some(barconf::Pinned::Folder { .. })) {
+                                if let Some((parent, i)) = barconf::parent_mut(list, &p) {
+                                    let e = parent.remove(i);
+                                    if let barconf::Pinned::Folder { apps, .. } = &mut parent[i - 1] {
+                                        apps.push(e);
+                                        let mut np = above.clone();
+                                        np.push(apps.len() - 1);
+                                        after = Some(np);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    (Msg::PinOut, Some(p)) if p.len() > 1 => {
+                        let folder = p[..p.len() - 1].to_vec();
+                        let e = barconf::parent_mut(list, &p).map(|(parent, i)| parent.remove(i));
+                        if let (Some(e), Some((parent, fi))) = (e, barconf::parent_mut(list, &folder)) {
+                            parent.insert(fi + 1, e);
+                            let mut np = folder.clone();
+                            *np.last_mut().expect("non-empty") = fi + 1;
+                            after = Some(np);
+                        }
+                    }
+                    (Msg::PinRemove, Some(p)) => {
+                        if let Some((parent, i)) = barconf::parent_mut(list, &p) {
+                            // A folder's apps stay, where it was.
+                            if let barconf::Pinned::Folder { apps, .. } = parent.remove(i) {
+                                for (k, a) in apps.into_iter().enumerate() {
+                                    parent.insert(i + k, a);
+                                }
+                            }
+                        }
+                        after = None;
+                    }
+                    (Msg::PinAdd, sel) => {
+                        let id = self.edit.pin_new.trim().trim_end_matches(".desktop").to_owned();
+                        if id.is_empty() {
+                            return Task::none();
+                        }
+                        self.edit.pin_new.clear();
+                        let into = sel.filter(|p| matches!(barconf::get(list, p), Some(barconf::Pinned::Folder { .. })));
+                        match into.as_ref().and_then(|p| barconf::parent_mut(list, p)) {
+                            Some((parent, i)) => {
+                                if let barconf::Pinned::Folder { apps, .. } = &mut parent[i] {
+                                    apps.push(barconf::Pinned::App(id));
+                                }
+                            }
+                            None => list.push(barconf::Pinned::App(id)),
+                        }
+                    }
+                    (Msg::PinNewFolder, _) => {
+                        list.push(barconf::Pinned::Folder { name: "New folder".into(), icon: None, apps: vec![] });
+                        after = Some(vec![list.len() - 1]);
+                    }
+                    (Msg::FolderName(n), Some(p)) => {
+                        if let Some((parent, i)) = barconf::parent_mut(list, &p) {
+                            if let barconf::Pinned::Folder { name, .. } = &mut parent[i] {
+                                *name = n;
+                            }
+                        }
+                    }
+                    (Msg::FolderIcon(v), Some(p)) => {
+                        if let Some((parent, i)) = barconf::parent_mut(list, &p) {
+                            if let barconf::Pinned::Folder { icon, .. } = &mut parent[i] {
+                                *icon = (!v.trim().is_empty()).then(|| v.trim().to_owned());
+                            }
+                        }
+                    }
+                    _ => return Task::none(),
                 }
-                self.edit.pinned = text;
-                return self.module_set("pinned", list);
+                self.edit.pin_sel = after.and_then(|p| barconf::flatten(&self.edit.pinned).iter().position(|(q, _)| *q == p));
+                let pinned = self.edit.pinned.clone();
+                let name = self.selected.clone();
+                if let (Some(name), Some(d)) = (name, self.bar_mut()) {
+                    d.set_pinned(&name, &pinned);
+                    return self.touched(false);
+                }
             }
             Msg::MaxWidth(v) => {
                 self.edit.max_width = v.round();
@@ -1055,6 +1209,191 @@ fn edit_field(
     })
 }
 
+/// The selected module's group and its members (group first), when the
+/// selection is a group or in one.
+fn group_of(a: &Appearance) -> Vec<String> {
+    let Some(sel) = a.selected.as_deref() else { return vec![] };
+    let group = if barconf::kind_of(sel) == "group" { Some(sel.to_owned()) } else { a.edit.in_group.clone() };
+    let Some(g) = group else { return vec![] };
+    let members = a.groups.iter().find(|(n, _)| *n == g).map(|(_, m)| m.clone()).unwrap_or_default();
+    std::iter::once(g).chain(members).collect()
+}
+
+/// Chips for a group and its modules: tap one to edit it, without
+/// scrolling back to the bar preview.
+fn group_chips() -> Element<Appearance, Msg> {
+    use heroui::fltk::enums::{Event, FrameType};
+    use heroui::fltk::frame::Frame;
+    use heroui::fltk::prelude::{WidgetBase, WidgetExt};
+    Element::new(|ctx| {
+        // (names, selected)
+        let st: std::rc::Rc<std::cell::RefCell<(Vec<String>, Option<String>)>> = Default::default();
+        let chips = |names: &[String]| -> Vec<(i32, i32)> {
+            let t = heroui::theme::current();
+            draw::set_font(t.font(), t.font_size - 1);
+            let mut x = 0;
+            names
+                .iter()
+                .enumerate()
+                .map(|(k, n)| {
+                    let label = if k == 0 { format!("Group: {}", barconf::pretty(n)) } else { barconf::pretty(n) };
+                    let w = draw::width(&label).ceil() as i32 + 24;
+                    let r = (x, w);
+                    x += w + 6;
+                    r
+                })
+                .collect()
+        };
+        let mut f = Frame::default();
+        f.set_frame(FrameType::NoBox);
+        {
+            let st = st.clone();
+            f.draw(move |f| {
+                let t = heroui::theme::current();
+                let (names, sel) = &*st.borrow();
+                let spans = chips(names);
+                draw::set_font(t.font(), t.font_size - 1);
+                for (k, (n, (x, w))) in names.iter().zip(spans).enumerate() {
+                    let on = sel.as_deref() == Some(n.as_str());
+                    let (cx, cy, ch) = (f.x() + x, f.y() + 4, f.h() - 8);
+                    draw::set_draw_color(if on { t.accent } else if k == 0 { t.surface } else { t.surface_alt });
+                    draw::draw_rounded_rectf(cx, cy, w, ch, t.radius.min(ch / 2));
+                    draw::set_draw_color(if on { t.accent_text } else { t.text });
+                    let label = if k == 0 { format!("Group: {}", barconf::pretty(n)) } else { barconf::pretty(n) };
+                    draw::draw_text2(&label, cx, cy, w, ch, Align::Center);
+                }
+            });
+        }
+        let emit = ctx.emitter();
+        {
+            let st = st.clone();
+            f.handle(move |f, ev| {
+                if ev != Event::Push {
+                    return false;
+                }
+                let px = heroui::fltk::app::event_x() - f.x();
+                let names = st.borrow().0.clone();
+                if let Some(k) = chips(&names).iter().position(|&(x, w)| px >= x && px < x + w) {
+                    emit(Msg::SelectName(names[k].clone()));
+                }
+                true
+            });
+        }
+        let mut w = f.clone();
+        ctx.bind(move |a: &Appearance| {
+            let now = (group_of(a), a.selected.clone());
+            if *st.borrow() != now {
+                *st.borrow_mut() = now;
+                heroui::widgets::repaint(&mut w);
+            }
+        });
+        f.as_base_widget()
+    })
+}
+
+/// The taskbar's pinned apps and folders, as an indented list: select an
+/// entry to move it (up, down, into the folder above, out of its folder)
+/// or remove it; a selected folder can be renamed and given an icon.
+fn pinned_editor() -> Element<Appearance, Msg> {
+    let sel_folder = |a: &Appearance| {
+        let rows = barconf::flatten(&a.edit.pinned);
+        a.edit.pin_sel.and_then(|k| rows.get(k)).and_then(|(p, _)| match barconf::get(&a.edit.pinned, p) {
+            Some(barconf::Pinned::Folder { name, icon, .. }) => Some((name.clone(), icon.clone().unwrap_or_default())),
+            _ => None,
+        })
+    };
+    column(vec![
+        caption("Pinned apps and folders (tap one to move it, rename a folder...)").fixed(22),
+        list(|a: &Appearance| barconf::flatten(&a.edit.pinned).len(), pinned_row),
+        row(vec![
+            button("Up", Msg::PinMove(-1)),
+            button("Down", Msg::PinMove(1)),
+            button("Into folder above", Msg::PinIn),
+            button("Out of folder", Msg::PinOut),
+            button("Remove", Msg::PinRemove),
+        ])
+        .fixed(34)
+        .visible(|a: &Appearance| a.edit.pin_sel.is_some()),
+        row(vec![
+            label("Folder name").fixed(110),
+            text_input(move |a: &Appearance| sel_folder(a).map(|f| f.0).unwrap_or_default(), Msg::FolderName),
+            label("Icon").fixed(40),
+            text_input(move |a: &Appearance| sel_folder(a).map(|f| f.1).unwrap_or_default(), Msg::FolderIcon).fixed(120),
+        ])
+        .fixed(34)
+        .visible(move |a: &Appearance| sel_folder(a).is_some()),
+        caption("Folder icon: empty shows small icons of its apps.").fixed(20).visible(move |a: &Appearance| sel_folder(a).is_some()),
+        row(vec![
+            text_input_submit(|a: &Appearance| a.edit.pin_new.clone(), Msg::PinNewText, Msg::PinAdd),
+            primary_button("Add app", Msg::PinAdd).fixed(100),
+            button("New folder", Msg::PinNewFolder).fixed(110),
+        ])
+        .fixed(34),
+        caption("Apps by .desktop file name (foot, firefox-esr); into the selected folder if one is.").fixed(20),
+    ])
+    .spacing(6)
+    .fixed_with(move |a: &Appearance| {
+        let rows = barconf::flatten(&a.edit.pinned).len() as i32;
+        let sel = if a.edit.pin_sel.is_some() { 40 } else { 0 };
+        let folder = if sel_folder(a).is_some() { 66 } else { 0 };
+        28 + rows * (32 + a.theme.spacing) + sel + folder + 40 + 26 + 10
+    })
+}
+
+/// How a pinned row looks: (depth, label, icon, is a folder, selected).
+type PinRow = (usize, String, String, bool, bool);
+
+/// One entry of the pinned list.
+fn pinned_row(k: usize) -> Element<Appearance, Msg> {
+    Element::new(move |ctx| {
+        let cur: std::rc::Rc<std::cell::RefCell<PinRow>> = Default::default();
+        let mut b = custom_button({
+            let cur = cur.clone();
+            move |b| {
+                let t = heroui::theme::current();
+                let (depth, label, icon, _, selected) = &*cur.borrow();
+                let x0 = b.x() + 6 + *depth as i32 * 22;
+                if *selected {
+                    draw::set_draw_color(t.accent);
+                    draw::draw_rounded_rectf(x0 - 6, b.y(), b.x() + b.w() - x0 + 6, b.h(), t.radius.min(10));
+                } else {
+                    let a = heroui::hover::hover_amount(b);
+                    if a > 0.0 {
+                        draw::set_draw_color(heroui::widgets::mix(t.background, t.surface_alt, a));
+                        draw::draw_rounded_rectf(x0 - 6, b.y(), b.x() + b.w() - x0 + 6, b.h(), t.radius.min(10));
+                    }
+                }
+                let fg = if *selected { t.accent_text } else { t.text };
+                if !heroui::icons::draw(icon, x0, b.y() + (b.h() - 18) / 2, 18, fg) {
+                    heroui::icons::draw("app", x0, b.y() + (b.h() - 18) / 2, 18, fg);
+                }
+                draw::set_font(t.font(), t.font_size);
+                draw::set_draw_color(fg);
+                draw::draw_text2(label, x0 + 26, b.y(), b.w(), b.h(), Align::Left | Align::Inside);
+            }
+        });
+        let emit = ctx.emitter();
+        b.set_callback(move |_| emit(Msg::PinSel(k)));
+        let mut w = b.clone();
+        ctx.bind(move |a: &Appearance| {
+            let rows = barconf::flatten(&a.edit.pinned);
+            let Some((path, depth)) = rows.get(k) else { return };
+            let (label, icon, folder) = match barconf::get(&a.edit.pinned, path) {
+                Some(barconf::Pinned::App(id)) => (id.clone(), barconf::app_icon(id), false),
+                Some(barconf::Pinned::Folder { name, icon, .. }) => (name.clone(), icon.clone().unwrap_or_else(|| "folder".into()), true),
+                None => return,
+            };
+            let now = (*depth, label, icon, folder, a.edit.pin_sel == Some(k));
+            if *cur.borrow() != now {
+                *cur.borrow_mut() = now;
+                heroui::widgets::repaint(&mut w);
+            }
+        });
+        b.as_base_widget()
+    })
+    .fixed(32)
+}
+
 fn bar_page() -> Element<Appearance, Msg> {
     let mut rows: Vec<Element<Appearance, Msg>> = vec![
         heading("Bar").fixed(36),
@@ -1147,6 +1486,7 @@ fn bar_page() -> Element<Appearance, Msg> {
         })
         .fixed(36)
         .visible(|a: &Appearance| a.selected.is_some()),
+        group_chips().fixed(40).visible(|a: &Appearance| !group_of(a).is_empty()),
         row(vec![spacer(), button("Remove module", Msg::RemoveSelected).fixed(150)])
             .fixed(34)
             .visible(|a: &Appearance| a.selected.is_some()),
@@ -1212,6 +1552,13 @@ fn bar_page() -> Element<Appearance, Msg> {
         caption("With the popup, On click is what its Advanced/settings button runs.")
             .fixed(20)
             .visible(|a: &Appearance| a.edit.popup && a.selected.as_deref().is_some_and(|n| matches!(barconf::kind_of(n), "volume" | "network" | "bluetooth"))),
+        toggle("Click shows a calendar", |a: &Appearance| a.edit.popup, Msg::Popup).fixed(30).visible(is("clock")),
+        toggle("Weeks start on Sunday", |a: &Appearance| a.edit.sunday_first, Msg::SundayFirst)
+            .fixed(30)
+            .visible(move |a: &Appearance| is("clock")(a) && a.edit.popup),
+        toggle("Details when the mouse rests on it", |a: &Appearance| a.edit.tooltip, Msg::Tooltip)
+            .fixed(30)
+            .visible(move |a: &Appearance| plain(a)),
         // Spacer
         int_slider("Width", 0.0..=200.0, |a| a.edit.width, Msg::SpacerWidth).visible(move |a: &Appearance| is("spacer")(a) && !a.edit.expand),
         toggle("Expand: share the free space (centers what's between)", |a: &Appearance| a.edit.expand, Msg::SpacerExpand)
@@ -1278,15 +1625,7 @@ fn bar_page() -> Element<Appearance, Msg> {
             260,
         )
         .visible(taskbar),
-        row(vec![
-            label("Pinned apps").fixed(150),
-            text_input(|a: &Appearance| a.edit.pinned.clone(), Msg::Pinned),
-        ])
-        .fixed(34)
-        .visible(taskbar),
-        caption("Pinned: .desktop file names, separated by commas (foot, firefox-esr).")
-            .fixed(20)
-            .visible(taskbar),
+        pinned_editor().visible(taskbar),
         int_slider("Most room it takes", 100.0..=1600.0, |a| a.edit.max_width, Msg::MaxWidth).visible(taskbar),
         toggle("Always take that room (other modules never move)", |a: &Appearance| a.edit.fixed_width, Msg::FixedWidth)
             .fixed(30)
