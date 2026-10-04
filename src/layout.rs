@@ -67,6 +67,13 @@ struct State {
     drag: Option<Drag>,
     /// Icon-only chips, when full ones don't fit (see `fit`).
     compact: std::cell::Cell<bool>,
+    /// The chip under the pointer (section * 1000 + index), fading.
+    hover: heroui::hover::HoverFade,
+}
+
+/// A chip's hover key.
+fn key(section: usize, index: usize) -> usize {
+    section * 1000 + index
 }
 
 impl State {
@@ -231,7 +238,8 @@ pub fn editor() -> Element<Appearance, Msg> {
                 for c in layout(&st, x, w, skip) {
                     let (name, label, icon) = &st.sections[c.section][c.index];
                     let selected = st.selected.as_deref() == Some(name.as_str());
-                    draw::set_draw_color(if selected { t.accent } else { t.surface_alt });
+                    let a = if dragging.is_some() { 0.0 } else { st.hover.amount(key(c.section, c.index)) };
+                    draw::set_draw_color(if selected { heroui::widgets::mix(t.accent, t.text, 0.15 * a) } else { heroui::widgets::mix(t.surface_alt, t.accent, 0.3 * a) });
                     draw::draw_rounded_rectf(c.x, cy, c.w, ch, t.radius.min(ch / 2));
                     chip_content(label, icon, compact, (c.x, cy, c.w, ch), if selected { t.accent_text } else { t.text });
                 }
@@ -265,7 +273,22 @@ pub fn editor() -> Element<Appearance, Msg> {
             let st = st.clone();
             f.handle(move |f, ev| {
                 let (px, py) = (heroui::fltk::app::event_x(), heroui::fltk::app::event_y());
+                let chip_at = |s: &State| {
+                    layout(s, f.x(), f.w(), None)
+                        .into_iter()
+                        .find(|c| px >= c.x && px < c.x + c.w && py >= f.y() + 4 && py < f.y() + f.h() - 20)
+                };
                 match ev {
+                    Event::Enter | Event::Move => {
+                        let mut s = st.borrow_mut();
+                        let h = chip_at(&s).map(|c| key(c.section, c.index));
+                        s.hover.set(h, &f.as_base_widget());
+                        true
+                    }
+                    Event::Leave => {
+                        st.borrow_mut().hover.set(None, &f.as_base_widget());
+                        true
+                    }
                     Event::Push => {
                         let mut s = st.borrow_mut();
                         s.fit(f.w());
@@ -316,6 +339,9 @@ pub fn editor() -> Element<Appearance, Msg> {
             });
             let mut s = st.borrow_mut();
             if s.sections != sections || s.selected != a.selected {
+                if s.sections != sections {
+                    s.hover.clear();
+                }
                 s.sections = sections;
                 s.selected = a.selected.clone();
                 w.redraw();

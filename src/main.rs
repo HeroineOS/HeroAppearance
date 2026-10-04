@@ -208,7 +208,9 @@ enum Msg {
     /// Edit member `i` of the selected group.
     EditMember(usize),
     /// Move member `i` of the selected group up (-1) or down (1).
-    MemberMove(usize, i32),
+    /// Move a module of the selected (or selected module's) group from one
+    /// position to another.
+    MemberMoveTo(usize, usize),
     /// Back to the group of the selected member.
     EditGroup,
     /// Edit the module with this name (from the group chips).
@@ -686,18 +688,24 @@ impl App for Appearance {
                 self.load_edit();
                 return t;
             }
-            Msg::MemberMove(i, d) => {
-                let j = i as i32 + d;
-                if j < 0 || j as usize >= self.edit.members.len() {
+            Msg::MemberMoveTo(from, to) => {
+                let names = group_of(self);
+                let Some((g, members)) = names.split_first() else { return Task::none() };
+                let mut members = members.to_vec();
+                if from >= members.len() {
                     return Task::none();
                 }
-                self.edit.members.swap(i, j as usize);
-                let (Some(g), members) = (self.selected.clone(), self.edit.members.clone()) else { return Task::none() };
+                let m = members.remove(from);
+                members.insert(to.min(members.len()), m);
+                let g = g.clone();
                 if let Some(d) = self.bar_mut() {
                     d.set_module_list(&g, "modules", &members);
                 }
                 if let Some(d) = &self.bar {
                     self.groups = d.groups();
+                }
+                if self.selected.as_deref() == Some(g.as_str()) {
+                    self.edit.members = members;
                 }
                 return self.touched(false);
             }
@@ -1149,8 +1157,9 @@ fn button_like_swatch(c: u32) -> Element<Appearance, Msg> {
         let mut b = custom_button(move |b| {
             let s = b.w().min(b.h()) - 4;
             let (x, y) = (b.x() + (b.w() - s) / 2, b.y() + (b.h() - s) / 2);
-            if heroui::hover::is_hovered(b) {
-                draw::set_draw_color(t.text_dim);
+            let a = heroui::hover::hover_amount(b);
+            if a > 0.0 {
+                draw::set_draw_color(heroui::widgets::mix(t.background, t.text_dim, a));
                 draw::draw_pie(x - 2, y - 2, s + 4, s + 4, 0.0, 360.0);
             }
             draw::set_draw_color(Color::from_hex(c));
@@ -1236,48 +1245,95 @@ fn group_of(a: &Appearance) -> Vec<String> {
     std::iter::once(g).chain(members).collect()
 }
 
-/// Chips for a group and its modules: tap one to edit it, without
-/// scrolling back to the bar preview.
+/// A group and its modules as a small bar: tap one to edit it (without
+/// scrolling back to the bar preview), drag a module sideways to move it
+/// in the group, like modules in the preview.
 fn group_chips() -> Element<Appearance, Msg> {
     use heroui::fltk::enums::{Event, FrameType};
     use heroui::fltk::frame::Frame;
     use heroui::fltk::prelude::{WidgetBase, WidgetExt};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[derive(Default)]
+    struct St {
+        /// The group, then its modules.
+        names: Vec<String>,
+        selected: Option<String>,
+        hover: heroui::hover::HoverFade,
+        /// A module being moved: (its index in `names`, press x, pointer x, moving).
+        drag: Option<(usize, i32, i32, bool)>,
+    }
+    fn label(k: usize, n: &str) -> String {
+        if k == 0 {
+            format!("Group: {}", barconf::pretty(n))
+        } else {
+            barconf::pretty(n)
+        }
+    }
+    /// (x, w) of each chip (font set); `skip` is left out, with room made
+    /// for it before `gap`.
+    fn spans(names: &[String], skip: Option<(usize, usize)>) -> Vec<(usize, i32, i32)> {
+        let t = heroui::theme::current();
+        draw::set_font(t.font(), t.font_size - 1);
+        let width = |k: usize| draw::width(&label(k, &names[k])).ceil() as i32 + 24;
+        let mut x = 0;
+        let mut out = Vec::new();
+        for k in 0..names.len() {
+            if let Some((from, gap)) = skip {
+                if k == gap {
+                    x += width(from) + 6;
+                }
+                if k == from {
+                    continue;
+                }
+            }
+            out.push((k, x, width(k)));
+            x += width(k) + 6;
+        }
+        out
+    }
+    /// Where module `from` (index in `names`) dragged to `px` goes: its
+    /// position among the group's other modules.
+    fn target(names: &[String], from: usize, px: i32) -> usize {
+        spans(names, Some((from, usize::MAX))).iter().filter(|(k, x, w)| *k > 0 && x + w / 2 < px).count()
+    }
+    /// The chip (index in `names`) that room is made before, for module
+    /// `from` going to position `to` among the others.
+    fn gap_before(names: &[String], from: usize, to: usize) -> usize {
+        (1..names.len()).filter(|&k| k != from).nth(to).unwrap_or(names.len())
+    }
     Element::new(|ctx| {
-        // (names, selected)
-        let st: std::rc::Rc<std::cell::RefCell<(Vec<String>, Option<String>)>> = Default::default();
-        let chips = |names: &[String]| -> Vec<(i32, i32)> {
-            let t = heroui::theme::current();
-            draw::set_font(t.font(), t.font_size - 1);
-            let mut x = 0;
-            names
-                .iter()
-                .enumerate()
-                .map(|(k, n)| {
-                    let label = if k == 0 { format!("Group: {}", barconf::pretty(n)) } else { barconf::pretty(n) };
-                    let w = draw::width(&label).ceil() as i32 + 24;
-                    let r = (x, w);
-                    x += w + 6;
-                    r
-                })
-                .collect()
-        };
+        let st: Rc<RefCell<St>> = Rc::default();
         let mut f = Frame::default();
         f.set_frame(FrameType::NoBox);
         {
             let st = st.clone();
             f.draw(move |f| {
                 let t = heroui::theme::current();
-                let (names, sel) = &*st.borrow();
-                let spans = chips(names);
-                draw::set_font(t.font(), t.font_size - 1);
-                for (k, (n, (x, w))) in names.iter().zip(spans).enumerate() {
-                    let on = sel.as_deref() == Some(n.as_str());
-                    let (cx, cy, ch) = (f.x() + x, f.y() + 4, f.h() - 8);
-                    draw::set_draw_color(if on { t.accent } else if k == 0 { t.surface } else { t.surface_alt });
-                    draw::draw_rounded_rectf(cx, cy, w, ch, t.radius.min(ch / 2));
+                let Ok(s) = st.try_borrow() else { return };
+                let moving = s.drag.filter(|d| d.3);
+                // The others make room where the moved one would land.
+                let skip = moving.map(|(from, _, px, _)| (from, gap_before(&s.names, from, target(&s.names, from, px - f.x()))));
+                let (cy, ch) = (f.y() + 4, f.h() - 8);
+                let r = t.radius.min(ch / 2);
+                for (k, x, w) in spans(&s.names, skip) {
+                    let n = &s.names[k];
+                    let on = s.selected.as_deref() == Some(n.as_str());
+                    let base = if on { t.accent } else if k == 0 { t.surface } else { t.surface_alt };
+                    let a = if on { 0.0 } else { s.hover.amount(k) };
+                    draw::set_draw_color(heroui::widgets::mix(base, t.accent, 0.3 * a));
+                    draw::draw_rounded_rectf(f.x() + x, cy, w, ch, r);
                     draw::set_draw_color(if on { t.accent_text } else { t.text });
-                    let label = if k == 0 { format!("Group: {}", barconf::pretty(n)) } else { barconf::pretty(n) };
-                    draw::draw_text2(&label, cx, cy, w, ch, Align::Center);
+                    draw::draw_text2(&label(k, n), f.x() + x, cy, w, ch, Align::Center);
+                }
+                if let Some((from, _, px, _)) = moving {
+                    let w = spans(&s.names, None).iter().find(|(k, _, _)| *k == from).map_or(60, |c| c.2);
+                    let x = (px - w / 2).clamp(f.x(), f.x() + f.w() - w);
+                    draw::set_draw_color(t.accent);
+                    draw::draw_rounded_rectf(x, cy - 2, w, ch, r);
+                    draw::set_draw_color(t.accent_text);
+                    draw::draw_text2(&label(from, &s.names[from]), x, cy - 2, w, ch, Align::Center);
                 }
             });
         }
@@ -1285,22 +1341,75 @@ fn group_chips() -> Element<Appearance, Msg> {
         {
             let st = st.clone();
             f.handle(move |f, ev| {
-                if ev != Event::Push {
-                    return false;
-                }
                 let px = heroui::fltk::app::event_x() - f.x();
-                let names = st.borrow().0.clone();
-                if let Some(k) = chips(&names).iter().position(|&(x, w)| px >= x && px < x + w) {
-                    emit(Msg::SelectName(names[k].clone()));
+                let me = f.as_base_widget();
+                let at = |names: &[String]| spans(names, None).into_iter().find(|&(_, x, w)| px >= x && px < x + w).map(|c| c.0);
+                match ev {
+                    Event::Enter | Event::Move => {
+                        let mut s = st.borrow_mut();
+                        let h = at(&s.names);
+                        s.hover.set(h, &me);
+                        true
+                    }
+                    Event::Leave => {
+                        st.borrow_mut().hover.set(None, &me);
+                        true
+                    }
+                    Event::Push => {
+                        let mut s = st.borrow_mut();
+                        let hit = at(&s.names);
+                        s.drag = hit.map(|k| (k, px, heroui::fltk::app::event_x(), false));
+                        true
+                    }
+                    Event::Drag => {
+                        let mut s = st.borrow_mut();
+                        if let Some(d) = s.drag.as_mut() {
+                            d.2 = heroui::fltk::app::event_x();
+                            // Modules move; the group stays first.
+                            if !d.3 && d.0 > 0 && (px - d.1).abs() > 4 {
+                                d.3 = true;
+                            }
+                            if d.3 {
+                                drop(s);
+                                heroui::widgets::repaint(&mut me.clone());
+                            }
+                        }
+                        true
+                    }
+                    Event::Released => {
+                        let (drag, names) = {
+                            let mut s = st.borrow_mut();
+                            (s.drag.take(), s.names.clone())
+                        };
+                        match drag {
+                            Some((from, _, _, true)) => {
+                                // Positions among the modules (the group is 0).
+                                let to = target(&names, from, px);
+                                if to != from - 1 {
+                                    emit(Msg::MemberMoveTo(from - 1, to));
+                                }
+                            }
+                            Some((k, _, _, false)) => emit(Msg::SelectName(names[k].clone())),
+                            None => {}
+                        }
+                        heroui::widgets::repaint(&mut me.clone());
+                        true
+                    }
+                    _ => false,
                 }
-                true
             });
         }
         let mut w = f.clone();
         ctx.bind(move |a: &Appearance| {
-            let now = (group_of(a), a.selected.clone());
-            if *st.borrow() != now {
-                *st.borrow_mut() = now;
+            let (names, selected) = (group_of(a), a.selected.clone());
+            let mut s = st.borrow_mut();
+            if s.names != names || s.selected != selected {
+                if s.names != names {
+                    s.hover.clear();
+                }
+                s.names = names;
+                s.selected = selected;
+                drop(s);
                 heroui::widgets::repaint(&mut w);
             }
         });
@@ -1590,14 +1699,12 @@ fn bar_page() -> Element<Appearance, Msg> {
         toggle("Drawer: show only the icon until clicked", |a: &Appearance| a.edit.drawer, Msg::Drawer)
             .fixed(30)
             .visible(is("group")),
-        caption("Modules in this group:").fixed(24).visible(is("group")),
+        caption("Modules in this group (drag them in the strip above to reorder):").fixed(24).visible(is("group")),
         list(
             |a: &Appearance| if is("group")(a) { a.edit.members.len() } else { 0 },
             |i| {
                 row(vec![
                     text(move |a: &Appearance| a.edit.members.get(i).map(|m| barconf::pretty(m)).unwrap_or_default()),
-                    button("Up", Msg::MemberMove(i, -1)).fixed(60).enabled(move |_: &Appearance| i > 0),
-                    button("Down", Msg::MemberMove(i, 1)).fixed(70).enabled(move |a: &Appearance| i + 1 < a.edit.members.len()),
                     button("Edit", Msg::EditMember(i)).fixed(70),
                 ])
                 .fixed(34)
