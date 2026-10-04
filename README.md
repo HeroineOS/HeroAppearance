@@ -38,7 +38,7 @@ Debian packages for amd64 and arm64 are on the
 [releases](https://github.com/HeroineOS/HeroAppearance/releases) page:
 
 ```sh
-sudo apt install ./heroappearance_0.1.5-1_arm64.deb
+sudo apt install ./heroappearance_0.1.6-1_arm64.deb
 ```
 
 It shows up as **Appearance** in application menus (`heroappearance` on the command line).
