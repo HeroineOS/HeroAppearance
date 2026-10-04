@@ -207,6 +207,8 @@ enum Msg {
     LeaveGroup,
     /// Edit member `i` of the selected group.
     EditMember(usize),
+    /// Move member `i` of the selected group up (-1) or down (1).
+    MemberMove(usize, i32),
     /// Back to the group of the selected member.
     EditGroup,
     /// Edit the module with this name (from the group chips).
@@ -683,6 +685,21 @@ impl App for Appearance {
                 self.read_bar();
                 self.load_edit();
                 return t;
+            }
+            Msg::MemberMove(i, d) => {
+                let j = i as i32 + d;
+                if j < 0 || j as usize >= self.edit.members.len() {
+                    return Task::none();
+                }
+                self.edit.members.swap(i, j as usize);
+                let (Some(g), members) = (self.selected.clone(), self.edit.members.clone()) else { return Task::none() };
+                if let Some(d) = self.bar_mut() {
+                    d.set_module_list(&g, "modules", &members);
+                }
+                if let Some(d) = &self.bar {
+                    self.groups = d.groups();
+                }
+                return self.touched(false);
             }
             Msg::EditMember(i) => {
                 if let Some(m) = self.edit.members.get(i).cloned() {
@@ -1579,7 +1596,9 @@ fn bar_page() -> Element<Appearance, Msg> {
             |i| {
                 row(vec![
                     text(move |a: &Appearance| a.edit.members.get(i).map(|m| barconf::pretty(m)).unwrap_or_default()),
-                    button("Edit", Msg::EditMember(i)).fixed(80),
+                    button("Up", Msg::MemberMove(i, -1)).fixed(60).enabled(move |_: &Appearance| i > 0),
+                    button("Down", Msg::MemberMove(i, 1)).fixed(70).enabled(move |a: &Appearance| i + 1 < a.edit.members.len()),
+                    button("Edit", Msg::EditMember(i)).fixed(70),
                 ])
                 .fixed(34)
             },
