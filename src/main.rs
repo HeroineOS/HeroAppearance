@@ -122,6 +122,7 @@ struct ModuleEdit {
     folder_style: usize,
     // Workspaces
     ws_show: usize,
+    launcher_mode: usize,
     // Spacer
     width: f64,
     expand: bool,
@@ -158,6 +159,8 @@ const NET_FORMATS: [&str; 5] = [
 const SPACER_STYLES: &[&str] = &["Empty", "Line", "Dots"];
 const SPACER_STYLE_KEYS: [&str; 3] = ["none", "line", "dots"];
 const WS_SHOW: &[&str] = &["All", "With windows (and the shown one)"];
+const LAUNCHER_MODES: &[&str] = &["Drops down from the button", "Middle of the screen"];
+const LAUNCHER_MODE_KEYS: [&str; 2] = ["menu", "center"];
 const TASK_WS: &[&str] = &["All workspaces", "Current workspace only"];
 
 const ISLAND_STYLES: &[&str] = &["Sharp", "Rounded", "Pill"];
@@ -200,6 +203,7 @@ enum Msg {
     SpacerExpand(bool),
     SpacerStyle(usize),
     WsShow(usize),
+    LauncherMode(usize),
     TaskWorkspace(usize),
     Drawer(bool),
     Popup(bool),
@@ -377,6 +381,7 @@ impl Appearance {
             task_workspace: usize::from(d.module_str(name, "workspace") == "current"),
             folder_style: FOLDER_STYLE_KEYS.iter().position(|k| *k == d.module_str(name, "folder-style")).unwrap_or(0),
             ws_show: usize::from(d.module_str(name, "show") == "occupied"),
+            launcher_mode: usize::from(d.module_str(name, "mode") == "center"),
             width: d.module_int(name, "width", 12) as f64,
             expand: d.module_bool(name, "expand", false),
             spacer_style: SPACER_STYLE_KEYS.iter().position(|k| *k == d.module_str(name, "style")).unwrap_or(0),
@@ -626,6 +631,10 @@ impl App for Appearance {
             Msg::SpacerStyle(i) => {
                 self.edit.spacer_style = i;
                 return self.module_set("style", SPACER_STYLE_KEYS[i.min(2)]);
+            }
+            Msg::LauncherMode(i) => {
+                self.edit.launcher_mode = i;
+                return self.module_set("mode", LAUNCHER_MODE_KEYS[i.min(1)]);
             }
             Msg::WsShow(i) => {
                 self.edit.ws_show = i;
@@ -1196,6 +1205,7 @@ const KIND_LABELS: &[&str] = &[
     "Network",
     "Volume",
     "Bluetooth",
+    "Launcher (apps menu)",
     "Taskbar (apps and windows)",
     "Workspaces",
     "Spacer (space, line or dots)",
@@ -1639,7 +1649,12 @@ fn bar_page() -> Element<Appearance, Msg> {
             |e| e.disconnected.clone(),
             |k| k == "network",
         ),
-        edit_field("Text", "text", |e| e.text.clone(), |k| k == "custom"),
+        edit_field("Text", "text", |e| e.text.clone(), |k| k == "custom" || k == "launcher"),
+        setting("Opens", dropdown(|_: &Appearance| LAUNCHER_MODES, |a: &Appearance| a.edit.launcher_mode, Msg::LauncherMode), 260)
+            .visible(is("launcher")),
+        caption("Needs HeroLauncher. For a shortcut, bind \"herolauncher\" in your compositor (opens centered).")
+            .fixed(20)
+            .visible(is("launcher")),
         edit_field(
             "Command (shows output)",
             "exec",
