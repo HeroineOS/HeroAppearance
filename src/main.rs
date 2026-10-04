@@ -118,6 +118,7 @@ struct ModuleEdit {
     fixed_width: bool,
     button_width: f64,
     task_workspace: usize,
+    folder_style: usize,
     // Workspaces
     ws_show: usize,
     // Spacer
@@ -163,6 +164,8 @@ const TASK_SHOW: &[&str] = &["Pinned and running", "Running only", "Pinned only"
 const TASK_SHOW_KEYS: [&str; 3] = ["both", "running", "pinned"];
 const TASK_STYLES: &[&str] = &["Icons (one per app)", "Icons and titles (one per window)"];
 const TASK_STYLE_KEYS: [&str; 2] = ["icons", "icons-titles"];
+const FOLDER_STYLES: &[&str] = &["List (icons and names)", "Grid (icons, names below)", "Icons only"];
+const FOLDER_STYLE_KEYS: [&str; 3] = ["list", "grid", "icons"];
 
 #[derive(Clone)]
 enum Msg {
@@ -219,6 +222,7 @@ enum Msg {
     AddToGroup,
     TaskShow(usize),
     TaskStyle(usize),
+    FolderStyle(usize),
     PinSel(usize),
     /// Move the selected pinned entry up (-1) or down (1) among its siblings.
     PinMove(i32),
@@ -368,6 +372,7 @@ impl Appearance {
             fixed_width: d.module_bool(name, "fixed-width", false),
             button_width: d.module_int(name, "button-width", 180) as f64,
             task_workspace: usize::from(d.module_str(name, "workspace") == "current"),
+            folder_style: FOLDER_STYLE_KEYS.iter().position(|k| *k == d.module_str(name, "folder-style")).unwrap_or(0),
             ws_show: usize::from(d.module_str(name, "show") == "occupied"),
             width: d.module_int(name, "width", 12) as f64,
             expand: d.module_bool(name, "expand", false),
@@ -749,6 +754,10 @@ impl App for Appearance {
             Msg::TaskStyle(i) => {
                 self.edit.style = i;
                 return self.module_set("style", TASK_STYLE_KEYS[i.min(1)]);
+            }
+            Msg::FolderStyle(i) => {
+                self.edit.folder_style = i;
+                return self.module_set("folder-style", FOLDER_STYLE_KEYS[i.min(2)]);
             }
             Msg::PinSel(k) => self.edit.pin_sel = Some(k),
             Msg::PinNewText(t) => self.edit.pin_new = t,
@@ -1752,6 +1761,12 @@ fn bar_page() -> Element<Appearance, Msg> {
         )
         .visible(taskbar),
         pinned_editor().visible(taskbar),
+        setting(
+            "Open folders as",
+            dropdown(|_: &Appearance| FOLDER_STYLES, |a: &Appearance| a.edit.folder_style, Msg::FolderStyle),
+            260,
+        )
+        .visible(taskbar),
         int_slider("Most room it takes", 100.0..=1600.0, |a| a.edit.max_width, Msg::MaxWidth).visible(taskbar),
         toggle("Always take that room (other modules never move)", |a: &Appearance| a.edit.fixed_width, Msg::FixedWidth)
             .fixed(30)
