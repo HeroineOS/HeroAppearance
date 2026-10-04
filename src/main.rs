@@ -1684,9 +1684,10 @@ fn bar_page() -> Element<Appearance, Msg> {
         toggle("Click opens a popup (otherwise: runs On click)", |a: &Appearance| a.edit.popup, Msg::Popup)
             .fixed(30)
             .visible(|a: &Appearance| a.selected.as_deref().is_some_and(|n| matches!(barconf::kind_of(n), "volume" | "network" | "bluetooth"))),
+        toggle("Click shows time left and screen brightness", |a: &Appearance| a.edit.popup, Msg::Popup).fixed(30).visible(is("battery")),
         caption("With the popup, On click is what its Advanced/settings button runs.")
             .fixed(20)
-            .visible(|a: &Appearance| a.edit.popup && a.selected.as_deref().is_some_and(|n| matches!(barconf::kind_of(n), "volume" | "network" | "bluetooth"))),
+            .visible(|a: &Appearance| a.edit.popup && a.selected.as_deref().is_some_and(|n| matches!(barconf::kind_of(n), "volume" | "network" | "bluetooth" | "battery"))),
         toggle("Click shows a calendar", |a: &Appearance| a.edit.popup, Msg::Popup).fixed(30).visible(is("clock")),
         toggle("Weeks start on Sunday", |a: &Appearance| a.edit.sunday_first, Msg::SundayFirst)
             .fixed(30)
