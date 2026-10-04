@@ -114,6 +114,7 @@ struct ModuleEdit {
     tooltip: bool,
     /// Clock calendar: weeks start on Sunday.
     sunday_first: bool,
+    short_units: bool,
     max_width: f64,
     fixed_width: bool,
     button_width: f64,
@@ -239,6 +240,7 @@ enum Msg {
     FolderIcon(String),
     Tooltip(bool),
     SundayFirst(bool),
+    ShortUnits(bool),
     MaxWidth(f64),
     FixedWidth(bool),
     ButtonWidth(f64),
@@ -368,6 +370,7 @@ impl Appearance {
             pin_new: String::new(),
             tooltip: d.module_bool(name, "tooltip", true),
             sunday_first: d.module_str(name, "first-weekday") == "sunday",
+            short_units: d.module_str(name, "units") == "short",
             max_width: d.module_int(name, "max-width", 600) as f64,
             fixed_width: d.module_bool(name, "fixed-width", false),
             button_width: d.module_int(name, "button-width", 180) as f64,
@@ -764,6 +767,10 @@ impl App for Appearance {
             Msg::Tooltip(on) => {
                 self.edit.tooltip = on;
                 return self.module_set("tooltip", on);
+            }
+            Msg::ShortUnits(on) => {
+                self.edit.short_units = on;
+                return self.module_set("units", if on { "short" } else { "long" });
             }
             Msg::SundayFirst(on) => {
                 self.edit.sunday_first = on;
@@ -1689,6 +1696,9 @@ fn bar_page() -> Element<Appearance, Msg> {
             .fixed(20)
             .visible(|a: &Appearance| a.edit.popup && a.selected.as_deref().is_some_and(|n| matches!(barconf::kind_of(n), "volume" | "network" | "bluetooth" | "battery"))),
         toggle("Click shows a calendar", |a: &Appearance| a.edit.popup, Msg::Popup).fixed(30).visible(is("clock")),
+        toggle("Short speeds (1.7K instead of 1.7 KB/s: narrower)", |a: &Appearance| a.edit.short_units, Msg::ShortUnits)
+            .fixed(30)
+            .visible(is("network")),
         toggle("Weeks start on Sunday", |a: &Appearance| a.edit.sunday_first, Msg::SundayFirst)
             .fixed(30)
             .visible(move |a: &Appearance| is("clock")(a) && a.edit.popup),
