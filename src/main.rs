@@ -4,6 +4,7 @@
 //! applies them within a second. bar.toml keeps its comments.
 
 mod barconf;
+mod launcherconf;
 mod layout;
 
 use std::time::Duration;
@@ -19,6 +20,7 @@ use barconf::{BarDoc, KINDS, SECTIONS};
 enum Page {
     Theme,
     Bar,
+    Launcher,
 }
 
 /// Editable theme colors: (label, getter, setter).
@@ -88,6 +90,14 @@ struct Appearance {
     // Pending writes, debounced.
     theme_dirty: bool,
     bar_dirty: bool,
+    launcher_dirty: bool,
+    // HeroLauncher
+    launcher: Option<launcherconf::LauncherDoc>,
+    l_layout: usize,
+    l_categories: bool,
+    l_width: f64,
+    l_height: f64,
+    launcher_installed: bool,
     generation: u64,
     status: String,
 }
@@ -258,6 +268,12 @@ enum Msg {
     Edit(&'static str, String),
     // Saving
     Flush(u64),
+    LLayout(usize),
+    LCategories(bool),
+    LWidth(f64),
+    LHeight(f64),
+    /// Open the launcher to see the changes.
+    TryLauncher,
 }
 
 fn hex(c: Color) -> String {
@@ -310,10 +326,24 @@ impl Appearance {
             edit: ModuleEdit::default(),
             theme_dirty: false,
             bar_dirty: false,
+            launcher_dirty: false,
+            launcher: launcherconf::LauncherDoc::load(launcherconf::default_path()).ok(),
+            l_layout: 0,
+            l_categories: true,
+            l_width: 0.0,
+            l_height: 540.0,
+            launcher_installed: std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("herolauncher").is_file())),
             generation: 0,
             status: String::new(),
         };
         a.read_bar();
+        if let Some(d) = &a.launcher {
+            let layout = d.str("layout");
+            a.l_layout = launcherconf::LAYOUTS.iter().position(|(k, _)| *k == layout).unwrap_or(0);
+            a.l_categories = d.bool("categories", true);
+            a.l_width = d.int("width", 0) as f64;
+            a.l_height = d.int("height", 540) as f64;
+        }
         a
     }
 
@@ -412,6 +442,19 @@ impl Appearance {
         })
     }
 
+    /// Writes a key of HeroLauncher's config (debounced).
+    fn launcher_set(&mut self, key: &str, v: impl Into<toml_edit::Value>) -> Task<Msg> {
+        let Some(d) = self.launcher.as_mut() else { return Task::none() };
+        d.set(key, v);
+        self.launcher_dirty = true;
+        self.generation += 1;
+        let g = self.generation;
+        Task::perform(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            Msg::Flush(g)
+        })
+    }
+
     /// A new accent, with text on it kept readable.
     fn set_accent(&mut self, c: Color) {
         self.theme.accent = c;
@@ -468,6 +511,30 @@ impl App for Appearance {
     fn update(&mut self, msg: Msg) -> Task<Msg> {
         match msg {
             Msg::Page(p) => self.page = p,
+            Msg::LLayout(i) => {
+                self.l_layout = i;
+                return self.launcher_set("layout", launcherconf::LAYOUTS[i.min(2)].0);
+            }
+            Msg::LCategories(on) => {
+                self.l_categories = on;
+                return self.launcher_set("categories", on);
+            }
+            Msg::LWidth(v) => {
+                // Below 240 means "a default for the layout" (0).
+                let w = if v < 240.0 { 0 } else { v.round() as i64 };
+                self.l_width = w as f64;
+                return self.launcher_set("width", w);
+            }
+            Msg::LHeight(v) => {
+                self.l_height = v.round();
+                return self.launcher_set("height", v.round() as i64);
+            }
+            Msg::TryLauncher => {
+                return Task::perform(|| {
+                    let _ = std::process::Command::new("herolauncher").stdin(std::process::Stdio::null()).spawn();
+                    Msg::Flush(u64::MAX)
+                });
+            }
 
             Msg::Mode(mode) => {
                 // A new base palette; the accent and the other settings stay.
@@ -991,6 +1058,11 @@ impl App for Appearance {
                         errors.push(format!("bar: {e}"));
                     }
                 }
+                if std::mem::take(&mut self.launcher_dirty) {
+                    if let Some(Err(e)) = self.launcher.as_ref().map(|d| d.save()) {
+                        errors.push(format!("launcher: {e}"));
+                    }
+                }
                 self.status = if errors.is_empty() {
                     "Saved".into()
                 } else {
@@ -1021,6 +1093,7 @@ impl App for Appearance {
                 heading("Appearance").fixed(40),
                 nav("Theme", Page::Theme),
                 nav("Bar", Page::Bar),
+                nav("Launcher", Page::Launcher),
                 spacer(),
                 text(|s: &Appearance| s.status.clone()).fixed(24),
             ])
@@ -1028,6 +1101,7 @@ impl App for Appearance {
             column(vec![
                 theme_page().visible(|s: &Appearance| s.page == Page::Theme),
                 bar_page().visible(|s: &Appearance| s.page == Page::Bar),
+                launcher_page().visible(|s: &Appearance| s.page == Page::Launcher),
             ]),
         ])
         .padding(16)
@@ -1091,6 +1165,25 @@ fn preview() -> Element<Appearance, Msg> {
             draw::draw_pie(tx + tw - th + 3, ty + 3, th - 6, th - 6, 0.0, 360.0);
         },
     )
+}
+
+const LAYOUT_LABELS: [&str; 3] = [launcherconf::LAYOUTS[0].1, launcherconf::LAYOUTS[1].1, launcherconf::LAYOUTS[2].1];
+
+/// HeroLauncher's settings. Favorites are added and ordered in the
+/// launcher itself (right-click an app).
+fn launcher_page() -> Element<Appearance, Msg> {
+    scroll(vec![
+        heading("Launcher").fixed(36),
+        caption("HeroLauncher reads these each time it opens. Favorites: right-click an app in it.").fixed(22),
+        setting("Layout", dropdown(|_: &Appearance| &LAYOUT_LABELS[..], |a: &Appearance| a.l_layout, Msg::LLayout), 300),
+        toggle("Category buttons (Games, Internet, Office...)", |a: &Appearance| a.l_categories, Msg::LCategories).fixed(30),
+        int_slider("Width (left: automatic)", 200.0..=1400.0, |a| if a.l_width < 240.0 { 200.0 } else { a.l_width }, Msg::LWidth),
+        int_slider("Height", 300.0..=1200.0, |a| a.l_height, Msg::LHeight),
+        row(vec![spacer(), primary_button("Try it", Msg::TryLauncher).fixed(120)]).fixed(34).visible(|a: &Appearance| a.launcher_installed),
+        caption("Not installed? Install the herolauncher package.")
+            .fixed(20)
+            .visible(|a: &Appearance| !a.launcher_installed),
+    ])
 }
 
 fn theme_page() -> Element<Appearance, Msg> {
