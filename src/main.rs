@@ -5,6 +5,7 @@
 
 mod barconf;
 mod launcherconf;
+mod presets;
 mod layout;
 
 use std::time::Duration;
@@ -187,6 +188,7 @@ enum Msg {
     // Theme
     Mode(heroui::theme::Mode),
     Accent(u32),
+    Preset(usize),
     Color(usize, Color),
     Radius(f64),
     Spacing(f64),
@@ -549,6 +551,10 @@ impl App for Appearance {
                 self.theme.font = old.font;
                 self.theme.animations = old.animations;
                 self.theme.icon_theme = old.icon_theme;
+                return self.touched(true);
+            }
+            Msg::Preset(i) => {
+                self.theme = presets::PRESETS[i].apply(&self.theme);
                 return self.touched(true);
             }
             Msg::Accent(c) => {
@@ -1191,6 +1197,13 @@ fn theme_page() -> Element<Appearance, Msg> {
         heading("Theme").fixed(36),
         caption("Used by every HeroUI program; open ones update right away.").fixed(22),
         preview().fixed(150),
+        label("Presets").fixed(24),
+        caption("Pick one, then change any color below to make it yours.").fixed(20),
+    ];
+    for chunk in (0..presets::PRESETS.len()).collect::<Vec<_>>().chunks(4) {
+        rows.push(row(chunk.iter().map(|&i| preset_card(i)).collect()).fixed(60));
+    }
+    rows.extend([
         row(vec![
             label("Mode"),
             mode_button("System", heroui::theme::Mode::System),
@@ -1205,7 +1218,7 @@ fn theme_page() -> Element<Appearance, Msg> {
             .chain([spacer()])
             .collect())
         .fixed(34),
-    ];
+    ]);
     for (i, (name, get, _)) in COLORS.iter().enumerate() {
         let get = *get;
         rows.push(
@@ -1256,6 +1269,55 @@ fn theme_page() -> Element<Appearance, Msg> {
         caption("Off: changes happen instantly (reduced motion, saves battery).").fixed(20),
     ]);
     scroll(rows)
+}
+
+/// A preset theme, drawn in its own colors; the one in use is outlined.
+fn preset_card(i: usize) -> Element<Appearance, Msg> {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    Element::new(move |ctx| {
+        let p = &presets::PRESETS[i];
+        let on = Rc::new(Cell::new(false));
+        let mut b = custom_button({
+            let on = on.clone();
+            move |b| {
+                let c = Color::from_hex;
+                let t = heroui::theme::current();
+                let (x, y, w, h) = (b.x() + 2, b.y() + 2, b.w() - 4, b.h() - 4);
+                let r = t.radius.min(10);
+                let a = heroui::hover::hover_amount(b);
+                let ring = if on.get() { Some(t.accent) } else if a > 0.0 { Some(heroui::widgets::mix(t.background, t.text_dim, a)) } else { None };
+                if let Some(ring) = ring {
+                    draw::set_draw_color(ring);
+                    draw::draw_rounded_rectf(x - 2, y - 2, w + 4, h + 4, r + 2);
+                }
+                draw::set_draw_color(c(p.border));
+                draw::draw_rounded_rectf(x, y, w, h, r);
+                draw::set_draw_color(c(p.background));
+                draw::draw_rounded_rectf(x + 1, y + 1, w - 2, h - 2, (r - 1).max(0));
+                // A card, an accent "button" and the name in its text color.
+                draw::set_draw_color(c(p.surface));
+                draw::draw_rounded_rectf(x + 8, y + h - 20, w - 16, 12, 4);
+                draw::set_draw_color(c(p.accent));
+                draw::draw_rounded_rectf(x + w - 34, y + h - 18, 22, 8, 4);
+                draw::set_draw_color(c(p.text_dim));
+                draw::draw_rounded_rectf(x + 14, y + h - 16, (w / 3).min(40), 4, 2);
+                draw::set_font(t.font(), (t.font_size - 1).max(9));
+                draw::set_draw_color(c(p.text));
+                draw::draw_text2(p.name, x + 8, y + 4, w - 16, h - 26, Align::Left | Align::Inside | Align::Clip);
+            }
+        });
+        let emit = ctx.emitter();
+        b.set_callback(move |_| emit(Msg::Preset(i)));
+        let mut w = b.clone();
+        ctx.bind(move |a: &Appearance| {
+            let now = presets::PRESETS[i].matches(&a.theme);
+            if on.replace(now) != now {
+                heroui::widgets::repaint(&mut w);
+            }
+        });
+        b.as_base_widget()
+    })
 }
 
 /// One option of the mode selector; the chosen one is highlighted.
