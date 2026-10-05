@@ -1563,11 +1563,11 @@ fn pinned_editor() -> Element<Appearance, Msg> {
             label("Folder name").fixed(110),
             text_input(move |a: &Appearance| sel_folder(a).map(|f| f.0).unwrap_or_default(), Msg::FolderName),
             label("Icon").fixed(40),
-            text_input(move |a: &Appearance| sel_folder(a).map(|f| f.1).unwrap_or_default(), Msg::FolderIcon).fixed(120),
+            icon_button(move |a: &Appearance| sel_folder(a).map(|f| f.1).unwrap_or_default(), Msg::FolderIcon).fixed(150),
         ])
         .fixed(34)
         .visible(move |a: &Appearance| sel_folder(a).is_some()),
-        caption("Folder icon: empty shows small icons of its apps.").fixed(20).visible(move |a: &Appearance| sel_folder(a).is_some()),
+        caption("Folder icon: None shows small icons of its apps.").fixed(20).visible(move |a: &Appearance| sel_folder(a).is_some()),
         row(vec![
             text_input_submit(|a: &Appearance| a.edit.pin_new.clone(), Msg::PinNewText, Msg::PinAdd),
             primary_button("Add app", Msg::PinAdd).fixed(100),
@@ -1711,8 +1711,9 @@ fn bar_page() -> Element<Appearance, Msg> {
         .fixed(34),
     ]);
     // Settings of the selected module.
-    let not_taskbar = |k: &str| !matches!(k, "taskbar" | "spacer" | "group" | "workspaces");
-    let not_custom = |k: &str| !matches!(k, "custom" | "taskbar" | "spacer" | "group" | "workspaces");
+    // Kinds with no text of their own.
+    let not_taskbar = |k: &str| !matches!(k, "taskbar" | "spacer" | "group" | "workspaces" | "launcher");
+    let not_custom = |k: &str| !matches!(k, "custom" | "taskbar" | "spacer" | "group" | "workspaces" | "launcher");
     let taskbar = |a: &Appearance| a.selected.as_deref().is_some_and(|n| barconf::kind_of(n) == "taskbar");
     fn is(kind: &'static str) -> impl Fn(&Appearance) -> bool + Copy {
         move |a: &Appearance| a.selected.as_deref().is_some_and(|n| barconf::kind_of(n) == kind)
@@ -1722,6 +1723,8 @@ fn bar_page() -> Element<Appearance, Msg> {
             .as_deref()
             .is_some_and(|n| !matches!(barconf::kind_of(n), "taskbar" | "spacer" | "group" | "workspaces"))
     };
+    // The launcher has an icon and a label, but no format or interval.
+    let has_icon = move |a: &Appearance| plain(a) || is("group")(a) || is("launcher")(a);
     rows.extend([
         text(|a: &Appearance| {
             a.selected
@@ -1742,7 +1745,7 @@ fn bar_page() -> Element<Appearance, Msg> {
             |e| e.disconnected.clone(),
             |k| k == "network",
         ),
-        edit_field("Text", "text", |e| e.text.clone(), |k| k == "custom" || k == "launcher"),
+        edit_field("Text (beside the icon)", "text", |e| e.text.clone(), |k| k == "custom" || k == "launcher"),
         setting("Opens", dropdown(|_: &Appearance| LAUNCHER_MODES, |a: &Appearance| a.edit.launcher_mode, Msg::LauncherMode), 260)
             .visible(is("launcher")),
         caption("Needs HeroLauncher. For a shortcut, bind \"herolauncher\" in your compositor (opens centered).")
@@ -1760,30 +1763,25 @@ fn bar_page() -> Element<Appearance, Msg> {
             |e| e.interval.clone(),
             not_taskbar,
         ),
-        edit_field(
-            "On click (command)",
-            "on-click",
-            |e| e.on_click.clone(),
-            not_taskbar,
-        ),
+        edit_field("On click (command)", "on-click", |e| e.on_click.clone(), |k| !matches!(k, "taskbar" | "spacer" | "group" | "workspaces")),
         row(vec![
             label("Icon").fixed(150),
-            text_input(|a: &Appearance| a.edit.icon.clone(), |v| Msg::Edit("icon", v)),
-            icon(
+            // "" in the config = the kind's own icon, "none" = no icon.
+            icon_button(
                 |a: &Appearance| match a.edit.icon.as_str() {
                     "" => barconf::default_icon(barconf::kind_of(a.selected.as_deref().unwrap_or(""))).to_owned(),
                     "none" => String::new(),
                     i => i.to_owned(),
                 },
-                20,
-            )
-            .fixed(34),
+                |n| Msg::Edit("icon", if n.is_empty() { "none".into() } else { n }),
+            ),
+            button("Default", Msg::Edit("icon", String::new())).fixed(90).enabled(|a: &Appearance| !a.edit.icon.is_empty()),
         ])
         .fixed(34)
-        .visible(move |a: &Appearance| (plain(a) || is("group")(a)) && a.selected.is_some()),
-        caption("Icon: a built-in name (cpu, terminal, apps, power...), an app icon name or a file. Empty = default, none = no icon.")
+        .visible(move |a: &Appearance| has_icon(a) && a.selected.is_some()),
+        caption("Choose from the built-in icons and your icon theme's; Default is the module's own.")
             .fixed(20)
-            .visible(move |a: &Appearance| (plain(a) || is("group")(a)) && a.selected.is_some()),
+            .visible(move |a: &Appearance| has_icon(a) && a.selected.is_some()),
         // Network
         setting(
             "Show",
