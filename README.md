@@ -19,6 +19,13 @@ on [HeroUI](https://github.com/HeroineOS/HeroUI). It edits:
   line or dots), and groups (modules on one background, or a drawer): put modules in a
   group or take them out, add and edit members. Bar-wide font size, icon size, padding and
   margins.
+- **[HeroLauncher](https://github.com/HeroineOS/HeroLauncher)**: layout, categories, size.
+- **[HeroWallpaper](https://github.com/HeroineOS/HeroWallpaper)**: a gallery of the
+  pictures in your wallpaper folders (`~/Pictures/Wallpapers`, `~/Pictures`,
+  `/usr/share/backgrounds`...) or any file, scaling (fill, fit, stretch, center, tile),
+  the color around it (the theme's or your own), crossfade length and animated pictures,
+  for all screens or one. Thumbnails come from `herowallpaper thumbnail` (the shared
+  freedesktop cache), so big photos aren't decoded here. Needs HeroWallpaper 0.1.1 or later.
 
 Changes are saved ~300 ms after you stop editing, atomically. Open HeroUI programs re-skin
 right away; HeroBar applies layout changes within a second. `bar.toml` keeps its
@@ -33,6 +40,8 @@ Measured: 3 MB of its own memory, 0% CPU when idle, 1.7 MB binary.
 |---|---|
 | HeroUI theme | `~/.config/heroui/theme.conf` |
 | HeroBar | `~/.config/hero/bar.toml` (created from HeroBar's default on the first edit) |
+| HeroLauncher | `~/.config/hero/launcher.toml` |
+| HeroWallpaper | `~/.config/hero/wallpaper.toml` |
 
 ## Install
 
