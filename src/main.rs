@@ -534,7 +534,8 @@ impl App for Appearance {
             }
             Msg::TryLauncher => {
                 return Task::perform(|| {
-                    let _ = std::process::Command::new("herolauncher").stdin(std::process::Stdio::null()).spawn();
+                    // On its own (not our child), like the bar starts it.
+                    let _ = heroui::process::launch("herolauncher");
                     Msg::Flush(u64::MAX)
                 });
             }
