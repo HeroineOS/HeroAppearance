@@ -1535,7 +1535,8 @@ fn gallery() -> Element<Appearance, Msg> {
     }
     /// The thumbnail scaled to cover the tile.
     fn cover(thumb: &std::path::Path, w: i32, h: i32) -> Option<RgbImage> {
-        let img = heroui::fltk::image::SharedImage::load(thumb).ok()?.to_rgb().ok()?;
+        // Not SharedImage: that keeps every original in FLTK's cache.
+        let img = heroui::fltk::image::PngImage::load(thumb).ok()?.to_rgb().ok()?;
         let (iw, ih) = (img.data_w().max(1) as f64, img.data_h().max(1) as f64);
         let s = (w as f64 / iw).max(h as f64 / ih);
         Some(img.copy_sized((iw * s).ceil() as i32, (ih * s).ceil() as i32))
