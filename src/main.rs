@@ -6,6 +6,7 @@
 mod barconf;
 mod launcherconf;
 mod presets;
+mod wallconf;
 mod layout;
 
 use std::time::Duration;
@@ -22,6 +23,7 @@ enum Page {
     Theme,
     Bar,
     Launcher,
+    Wallpaper,
 }
 
 /// Editable theme colors: (label, getter, setter).
@@ -99,6 +101,27 @@ struct Appearance {
     l_width: f64,
     l_height: f64,
     launcher_installed: bool,
+    // HeroWallpaper
+    wall: Option<wallconf::WallDoc>,
+    wall_dirty: bool,
+    /// The page was opened (pictures and screens looked up).
+    w_loaded: bool,
+    w_installed: bool,
+    w_running: bool,
+    /// "All screens", then each screen's name.
+    w_outputs: Vec<String>,
+    w_output: usize,
+    /// The chosen screen has settings of its own.
+    w_own: bool,
+    w_path: String,
+    w_mode: usize,
+    w_theme_color: bool,
+    w_color: Color,
+    w_transition: f64,
+    w_animate: bool,
+    /// Pictures found, and their thumbnails (None: not made yet; Some(None):
+    /// can't be).
+    w_gallery: Vec<(std::path::PathBuf, Option<Option<std::path::PathBuf>>)>,
     generation: u64,
     status: String,
 }
@@ -277,6 +300,24 @@ enum Msg {
     LHeight(f64),
     /// Open the launcher to see the changes.
     TryLauncher,
+    // Wallpaper
+    WScanned(Vec<std::path::PathBuf>),
+    WThumbs(Vec<(std::path::PathBuf, Option<std::path::PathBuf>)>),
+    WOutputs(Vec<String>),
+    WRunning(bool),
+    WStart,
+    WOutput(usize),
+    WSameAsAll,
+    /// A gallery tile: 0 is "no picture".
+    WPick(usize),
+    WPathTyped(String),
+    WPathSubmit,
+    WBrowse,
+    WMode(usize),
+    WThemeColor(bool),
+    WColor(Color),
+    WTransition(f64),
+    WAnimate(bool),
 }
 
 fn hex(c: Color) -> String {
@@ -335,7 +376,22 @@ impl Appearance {
             l_categories: true,
             l_width: 0.0,
             l_height: 540.0,
-            launcher_installed: std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join("herolauncher").is_file())),
+            launcher_installed: installed("herolauncher"),
+            wall: wallconf::WallDoc::load(wallconf::default_path()).ok(),
+            wall_dirty: false,
+            w_loaded: false,
+            w_installed: installed("herowallpaper"),
+            w_running: false,
+            w_outputs: vec!["All screens".into()],
+            w_output: 0,
+            w_own: false,
+            w_path: String::new(),
+            w_mode: 0,
+            w_theme_color: true,
+            w_color: Color::from_rgb(0x14, 0x14, 0x1c),
+            w_transition: 450.0,
+            w_animate: true,
+            w_gallery: Vec::new(),
             generation: 0,
             status: String::new(),
         };
@@ -347,7 +403,88 @@ impl Appearance {
             a.l_width = d.int("width", 0) as f64;
             a.l_height = d.int("height", 540) as f64;
         }
+        a.read_wall();
         a
+    }
+
+    /// The screen being set (None: all of them).
+    fn w_screen(&self) -> Option<String> {
+        (self.w_output > 0).then(|| self.w_outputs.get(self.w_output).cloned()).flatten()
+    }
+
+    /// The wallpaper settings shown, for the chosen screen.
+    fn read_wall(&mut self) {
+        let screen = self.w_screen();
+        let Some(d) = &self.wall else { return };
+        let sc = screen.as_deref();
+        self.w_path = d.str(sc, "path");
+        let mode = d.str(sc, "mode");
+        self.w_mode = wallconf::MODES.iter().position(|(k, _)| *k == mode).unwrap_or(0);
+        let color = parse_hex(&d.str(sc, "color"));
+        self.w_theme_color = color.is_none();
+        self.w_color = color.unwrap_or(self.theme.background);
+        self.w_transition = d.int("transition", 450) as f64;
+        self.w_animate = d.bool("animate", true);
+        self.w_own = sc.is_some_and(|s| d.has_own(s));
+    }
+
+    /// Writes a key of HeroWallpaper's config (debounced); `all` keys are
+    /// for every screen.
+    fn wall_set(&mut self, key: &str, v: impl Into<toml_edit::Value>, all: bool) -> Task<Msg> {
+        let screen = if all { None } else { self.w_screen() };
+        let Some(d) = self.wall.as_mut() else { return Task::none() };
+        d.set(screen.as_deref(), key, v);
+        self.w_own = screen.as_deref().is_some_and(|s| d.has_own(s));
+        self.wall_touched()
+    }
+
+    fn wall_touched(&mut self) -> Task<Msg> {
+        self.wall_dirty = true;
+        self.generation += 1;
+        let g = self.generation;
+        Task::perform(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            Msg::Flush(g)
+        })
+    }
+
+    /// First visit: find pictures, screens, and whether it's running.
+    fn wall_load(&mut self) -> Task<Msg> {
+        Task::batch([
+            Task::perform(|| Msg::WScanned(wallconf::scan(120))),
+            Task::perform(|| {
+                let out = std::process::Command::new("herowallpaper").arg("--outputs").stderr(std::process::Stdio::null()).output();
+                let names = out.ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).lines().map(str::to_owned).collect()).unwrap_or_default();
+                Msg::WOutputs(names)
+            }),
+            check_running(0),
+        ])
+    }
+
+    /// Thumbnails for the next few pictures without one.
+    fn next_thumbs(&mut self) -> Task<Msg> {
+        let batch: Vec<std::path::PathBuf> = self.w_gallery.iter().filter(|(_, t)| t.is_none()).take(6).map(|(p, _)| p.clone()).collect();
+        if batch.is_empty() || !self.w_installed {
+            return Task::none();
+        }
+        Task::perform(move || {
+            let thumbs = wallconf::thumbnails(&batch);
+            Msg::WThumbs(batch.into_iter().zip(thumbs).collect())
+        })
+    }
+
+    /// Shows `path` (and lists it, if it's new).
+    fn wall_pick(&mut self, path: String) -> Task<Msg> {
+        self.w_path = path.clone();
+        let mut more = Task::none();
+        if !path.is_empty() {
+            let p = std::path::PathBuf::from(&path);
+            if !self.w_gallery.iter().any(|(g, _)| *g == p) {
+                self.w_gallery.insert(0, (p, None));
+                more = self.next_thumbs();
+            }
+        }
+        Task::batch([self.wall_set("path", path, false), more])
     }
 
     fn read_bar(&mut self) {
@@ -513,7 +650,108 @@ impl App for Appearance {
 
     fn update(&mut self, msg: Msg) -> Task<Msg> {
         match msg {
-            Msg::Page(p) => self.page = p,
+            Msg::Page(p) => {
+                self.page = p;
+                if p == Page::Wallpaper && !std::mem::replace(&mut self.w_loaded, true) {
+                    return self.wall_load();
+                }
+            }
+            Msg::WScanned(found) => {
+                // The picture shown comes first, found or not.
+                let current = std::path::PathBuf::from(&self.w_path);
+                let mut list: Vec<_> = found.into_iter().filter(|p| *p != current).map(|p| (p, None)).collect();
+                if !self.w_path.is_empty() {
+                    list.insert(0, (current, None));
+                }
+                self.w_gallery = list;
+                return self.next_thumbs();
+            }
+            Msg::WThumbs(done) => {
+                for (p, t) in done {
+                    if let Some(g) = self.w_gallery.iter_mut().find(|(g, _)| *g == p) {
+                        g.1 = Some(t);
+                    }
+                }
+                return self.next_thumbs();
+            }
+            Msg::WOutputs(names) => {
+                self.w_outputs = std::iter::once("All screens".to_string()).chain(names).collect();
+                self.w_output = self.w_output.min(self.w_outputs.len() - 1);
+            }
+            Msg::WRunning(on) => self.w_running = on,
+            Msg::WStart => {
+                let _ = heroui::process::launch("herowallpaper");
+                return check_running(600);
+            }
+            Msg::WOutput(i) => {
+                self.w_output = i;
+                self.read_wall();
+            }
+            Msg::WSameAsAll => {
+                let screen = self.w_screen();
+                if let (Some(d), Some(s)) = (self.wall.as_mut(), screen) {
+                    d.forget_screen(&s);
+                    self.read_wall();
+                    return self.wall_touched();
+                }
+            }
+            Msg::WPick(i) => {
+                let path = if i == 0 { String::new() } else { self.w_gallery.get(i - 1).map(|(p, _)| p.to_string_lossy().into_owned()).unwrap_or_default() };
+                return self.wall_pick(path);
+            }
+            Msg::WPathTyped(t) => self.w_path = t,
+            Msg::WPathSubmit => {
+                let path = self.w_path.trim().to_string();
+                let p = std::path::PathBuf::from(&path);
+                if !path.is_empty() && !p.is_file() {
+                    self.status = "No such picture".into();
+                    return Task::none();
+                }
+                let path = if path.is_empty() { path } else { std::fs::canonicalize(&p).unwrap_or(p).to_string_lossy().into_owned() };
+                return self.wall_pick(path);
+            }
+            Msg::WBrowse => {
+                use heroui::fltk::dialog::{NativeFileChooser, NativeFileChooserType};
+                let mut fc = NativeFileChooser::new(NativeFileChooserType::BrowseFile);
+                fc.set_title("Choose a wallpaper");
+                fc.set_filter(&format!("Pictures\t*.{{{}}}", wallconf::EXTENSIONS.join(",")));
+                if let Some(home) = std::env::var_os("HOME") {
+                    let _ = fc.set_directory(&std::path::PathBuf::from(home).join("Pictures"));
+                }
+                fc.show();
+                let f = fc.filename();
+                if f.is_file() {
+                    return self.wall_pick(f.to_string_lossy().into_owned());
+                }
+            }
+            Msg::WMode(i) => {
+                self.w_mode = i;
+                return self.wall_set("mode", wallconf::MODES[i.min(4)].0, false);
+            }
+            Msg::WThemeColor(on) => {
+                self.w_theme_color = on;
+                if on {
+                    let screen = self.w_screen();
+                    if let Some(d) = self.wall.as_mut() {
+                        d.remove(screen.as_deref(), "color");
+                    }
+                    return self.wall_touched();
+                }
+                return self.wall_set("color", hex(self.w_color), false);
+            }
+            Msg::WColor(c) => {
+                self.w_color = c;
+                self.w_theme_color = false;
+                return self.wall_set("color", hex(c), false);
+            }
+            Msg::WTransition(v) => {
+                self.w_transition = v.round();
+                return self.wall_set("transition", v.round() as i64, true);
+            }
+            Msg::WAnimate(on) => {
+                self.w_animate = on;
+                return self.wall_set("animate", on, true);
+            }
             Msg::LLayout(i) => {
                 self.l_layout = i;
                 return self.launcher_set("layout", launcherconf::LAYOUTS[i.min(2)].0);
@@ -1070,6 +1308,11 @@ impl App for Appearance {
                         errors.push(format!("bar: {e}"));
                     }
                 }
+                if std::mem::take(&mut self.wall_dirty) {
+                    if let Some(Err(e)) = self.wall.as_ref().map(|d| d.save()) {
+                        errors.push(format!("wallpaper: {e}"));
+                    }
+                }
                 if std::mem::take(&mut self.launcher_dirty) {
                     if let Some(Err(e)) = self.launcher.as_ref().map(|d| d.save()) {
                         errors.push(format!("launcher: {e}"));
@@ -1087,18 +1330,18 @@ impl App for Appearance {
     }
 
     fn view(&self) -> Element<Self, Msg> {
-        const PAGES: [Page; 3] = [Page::Theme, Page::Bar, Page::Launcher];
+        const PAGES: [Page; 4] = [Page::Theme, Page::Bar, Page::Launcher, Page::Wallpaper];
         row(vec![
             column(vec![
                 heading("Appearance").fixed(40),
                 // The highlight slides to the chosen page.
                 segmented(
-                    &["Theme", "Bar", "Launcher"],
+                    &["Theme", "Bar", "Launcher", "Wallpaper"],
                     true,
                     |s: &Appearance| PAGES.iter().position(|&p| p == s.page).unwrap_or(0),
                     |i| Msg::Page(PAGES[i]),
                 )
-                .fixed(3 * 36 + 2 * 8),
+                .fixed(4 * 36 + 3 * 8),
                 spacer(),
                 text(|s: &Appearance| s.status.clone()).fixed(24),
             ])
@@ -1108,6 +1351,7 @@ impl App for Appearance {
                 theme_page().transition(|s: &Appearance| s.page == Page::Theme),
                 bar_page().transition(|s: &Appearance| s.page == Page::Bar),
                 launcher_page().transition(|s: &Appearance| s.page == Page::Launcher),
+                wallpaper_page().transition(|s: &Appearance| s.page == Page::Wallpaper),
             ]),
         ])
         .padding(16)
@@ -1190,6 +1434,214 @@ fn launcher_page() -> Element<Appearance, Msg> {
             .fixed(20)
             .visible(|a: &Appearance| !a.launcher_installed),
     ])
+}
+
+/// Whether a program is on the PATH.
+fn installed(program: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(program).is_file()))
+}
+
+/// Asks (after `delay_ms`) whether the wallpaper is running.
+fn check_running(delay_ms: u64) -> Task<Msg> {
+    Task::perform(move || {
+        std::thread::sleep(Duration::from_millis(delay_ms));
+        let ok = std::process::Command::new("herowallpaper").arg("--running").status().is_ok_and(|s| s.success());
+        Msg::WRunning(ok)
+    })
+}
+
+const WALL_MODE_LABELS: [&str; 5] = [wallconf::MODES[0].1, wallconf::MODES[1].1, wallconf::MODES[2].1, wallconf::MODES[3].1, wallconf::MODES[4].1];
+
+/// HeroWallpaper's settings: a gallery of the pictures found, or any file.
+fn wallpaper_page() -> Element<Appearance, Msg> {
+    scroll(vec![
+        heading("Wallpaper").fixed(36),
+        caption("HeroWallpaper shows changes as soon as they're saved.").fixed(22),
+        row(vec![caption("HeroWallpaper isn't running."), spacer(), primary_button("Start it", Msg::WStart).fixed(120)])
+            .fixed(34)
+            .visible(|a: &Appearance| a.w_installed && !a.w_running),
+        caption("Not installed? Install the herowallpaper package.").fixed(20).visible(|a: &Appearance| !a.w_installed),
+        setting("Screen", dropdown(|a: &Appearance| &a.w_outputs[..], |a: &Appearance| a.w_output, Msg::WOutput), 260)
+            .visible(|a: &Appearance| a.w_outputs.len() > 2),
+        row(vec![caption("This screen has its own picture."), spacer(), button("Same as all screens", Msg::WSameAsAll).fixed(180)])
+            .fixed(32)
+            .visible(|a: &Appearance| a.w_output > 0 && a.w_own),
+        gallery(),
+        row(vec![
+            text_input_submit(|a: &Appearance| a.w_path.clone(), Msg::WPathTyped, Msg::WPathSubmit),
+            button("Browse…", Msg::WBrowse).fixed(110),
+        ])
+        .fixed(34),
+        row(vec![
+            label("Scaling"),
+            segmented(&WALL_MODE_LABELS, false, |a: &Appearance| a.w_mode, Msg::WMode).fixed(5 * 76 + 4 * 8),
+        ])
+        .fixed(34),
+        toggle("The theme's background color around it", |a: &Appearance| a.w_theme_color, Msg::WThemeColor).fixed(30),
+        row(vec![
+            label("Background color"),
+            caption_text(|a: &Appearance| hex(a.w_color)).fixed(76),
+            color_button(|a: &Appearance| a.w_color, Msg::WColor).fixed(44),
+        ])
+        .fixed(36)
+        .visible(|a: &Appearance| !a.w_theme_color),
+        label("All screens").fixed(24),
+        int_slider("Crossfade (ms)", 0.0..=1500.0, |a| a.w_transition, Msg::WTransition),
+        toggle("Play animated pictures (GIF, APNG, WebP)", |a: &Appearance| a.w_animate, Msg::WAnimate).fixed(30),
+        caption("They hold still while animations are off (Theme page), as in battery saver.").fixed(20),
+    ])
+}
+
+const TILE_H: i32 = 96;
+const TILE_COLS: i32 = 4;
+const TILE_GAP: i32 = 10;
+
+fn gallery_height(pictures: usize) -> i32 {
+    let rows = (pictures as i32 + 1 + TILE_COLS - 1) / TILE_COLS;
+    rows * TILE_H + (rows - 1).max(0) * TILE_GAP
+}
+
+/// The pictures as thumbnails, "no picture" first; the one shown has an
+/// accent ring. One widget, drawing every tile.
+fn gallery() -> Element<Appearance, Msg> {
+    use heroui::fltk::enums::{Event, FrameType};
+    use heroui::fltk::frame::Frame;
+    use heroui::fltk::image::RgbImage;
+    use heroui::fltk::prelude::{ImageExt, WidgetBase};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::rc::Rc;
+
+    #[derive(Default)]
+    struct G {
+        items: Vec<(PathBuf, Option<Option<PathBuf>>)>,
+        selected: Option<usize>,
+        hover: Option<usize>,
+        color: Option<Color>,
+        /// Thumbnails at tile size (None: unreadable).
+        cache: HashMap<(PathBuf, i32, i32), Option<RgbImage>>,
+    }
+    fn tile_rect(f: &Frame, i: usize) -> (i32, i32, i32, i32) {
+        let w = (f.w() - (TILE_COLS - 1) * TILE_GAP) / TILE_COLS;
+        let (c, r) = (i as i32 % TILE_COLS, i as i32 / TILE_COLS);
+        (f.x() + c * (w + TILE_GAP), f.y() + r * (TILE_H + TILE_GAP), w, TILE_H)
+    }
+    fn tile_at(f: &Frame, n: usize, x: i32, y: i32) -> Option<usize> {
+        (0..=n).find(|&i| {
+            let (tx, ty, tw, th) = tile_rect(f, i);
+            x >= tx && y >= ty && x < tx + tw && y < ty + th
+        })
+    }
+    /// The thumbnail scaled to cover the tile.
+    fn cover(thumb: &std::path::Path, w: i32, h: i32) -> Option<RgbImage> {
+        let img = heroui::fltk::image::SharedImage::load(thumb).ok()?.to_rgb().ok()?;
+        let (iw, ih) = (img.data_w().max(1) as f64, img.data_h().max(1) as f64);
+        let s = (w as f64 / iw).max(h as f64 / ih);
+        Some(img.copy_sized((iw * s).ceil() as i32, (ih * s).ceil() as i32))
+    }
+
+    Element::new(|ctx| {
+        RgbImage::set_scaling_algorithm(heroui::fltk::image::RgbScaling::Bilinear);
+        let g = Rc::new(RefCell::new(G::default()));
+        let mut f = Frame::default();
+        f.set_frame(FrameType::NoBox);
+        {
+            let g = g.clone();
+            f.draw(move |f| {
+                let t = heroui::theme::current();
+                let mut g = g.borrow_mut();
+                let r = t.radius.min(10);
+                for i in 0..=g.items.len() {
+                    let (x, y, w, h) = tile_rect(f, i);
+                    let ring = if g.selected == Some(i) {
+                        Some(t.accent)
+                    } else if g.hover == Some(i) {
+                        Some(t.text_dim)
+                    } else {
+                        None
+                    };
+                    let (x, y, w, h) = (x + 3, y + 3, w - 6, h - 6);
+                    if let Some(c) = ring {
+                        draw::set_draw_color(c);
+                        draw::draw_rounded_rectf(x - 3, y - 3, w + 6, h + 6, r + 3);
+                    }
+                    draw::set_draw_color(t.border);
+                    draw::draw_rounded_rectf(x, y, w, h, r);
+                    if i == 0 {
+                        draw::set_draw_color(g.color.unwrap_or(t.background));
+                        draw::draw_rounded_rectf(x + 1, y + 1, w - 2, h - 2, (r - 1).max(0));
+                        draw::set_font(t.font(), t.font_size);
+                        draw::set_draw_color(t.text_dim);
+                        draw::draw_text2("No picture", x, y, w, h, Align::Center);
+                        continue;
+                    }
+                    draw::set_draw_color(t.surface);
+                    draw::draw_rounded_rectf(x + 1, y + 1, w - 2, h - 2, (r - 1).max(0));
+                    let (path, thumb) = g.items[i - 1].clone();
+                    match thumb {
+                        Some(Some(thumb)) => {
+                            let (iw, ih) = (w - 2, h - 2);
+                            let img = g.cache.entry((thumb.clone(), iw, ih)).or_insert_with(|| cover(&thumb, iw, ih));
+                            if let Some(img) = img {
+                                let (sw, sh) = (img.w(), img.h());
+                                draw::push_clip(x + 1, y + 1, iw, ih);
+                                img.draw(x + 1 - (sw - iw) / 2, y + 1 - (sh - ih) / 2, sw, sh);
+                                draw::pop_clip();
+                            }
+                        }
+                        // Not made yet, or not a picture it can show.
+                        other => {
+                            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                            draw::set_font(t.font(), (t.font_size - 2).max(9));
+                            draw::set_draw_color(t.text_dim);
+                            let what = if other.is_none() { "…".to_string() } else { name };
+                            draw::draw_text2(&what, x + 4, y, w - 8, h, Align::Center | Align::Clip | Align::Wrap);
+                        }
+                    }
+                }
+            });
+        }
+        {
+            let (g, emit) = (g.clone(), ctx.emitter());
+            f.handle(move |f, ev| match ev {
+                Event::Enter | Event::Move | Event::Leave => {
+                    let n = g.borrow().items.len();
+                    let at = if ev == Event::Leave { None } else { tile_at(f, n, heroui::fltk::app::event_x(), heroui::fltk::app::event_y()) };
+                    if std::mem::replace(&mut g.borrow_mut().hover, at) != at {
+                        f.redraw();
+                    }
+                    true
+                }
+                Event::Push => true,
+                Event::Released => {
+                    let n = g.borrow().items.len();
+                    if let Some(i) = tile_at(f, n, heroui::fltk::app::event_x(), heroui::fltk::app::event_y()) {
+                        emit(Msg::WPick(i));
+                    }
+                    true
+                }
+                _ => false,
+            });
+        }
+        let mut w = f.clone();
+        ctx.bind(move |a: &Appearance| {
+            let selected = if a.w_path.is_empty() { Some(0) } else { a.w_gallery.iter().position(|(p, _)| p.to_str() == Some(a.w_path.as_str())).map(|i| i + 1) };
+            let color = (!a.w_theme_color).then_some(a.w_color);
+            let mut g = g.borrow_mut();
+            if g.items != a.w_gallery || g.selected != selected || g.color != color {
+                g.items = a.w_gallery.clone();
+                g.selected = selected;
+                g.color = color;
+                // Only tiles still shown keep their pictures.
+                let keep: std::collections::HashSet<PathBuf> = g.items.iter().filter_map(|(_, t)| t.clone().flatten()).collect();
+                g.cache.retain(|k, _| keep.contains(&k.0));
+                heroui::widgets::repaint(&mut w);
+            }
+        });
+        f.as_base_widget()
+    })
+    .fixed_with(|a: &Appearance| gallery_height(a.w_gallery.len()))
 }
 
 fn theme_page() -> Element<Appearance, Msg> {
