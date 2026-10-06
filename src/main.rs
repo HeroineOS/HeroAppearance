@@ -1081,33 +1081,27 @@ impl App for Appearance {
     }
 
     fn view(&self) -> Element<Self, Msg> {
-        let nav = |label: &str, page: Page| {
-            let l = label.to_owned();
-            column(vec![
-                primary_button(&l, Msg::Page(page))
-                    .visible(move |s: &Appearance| s.page == page)
-                    .fixed(36),
-                button(&l, Msg::Page(page))
-                    .visible(move |s: &Appearance| s.page != page)
-                    .fixed(36),
-            ])
-            .fixed(36)
-            .spacing(0)
-        };
+        const PAGES: [Page; 3] = [Page::Theme, Page::Bar, Page::Launcher];
         row(vec![
             column(vec![
                 heading("Appearance").fixed(40),
-                nav("Theme", Page::Theme),
-                nav("Bar", Page::Bar),
-                nav("Launcher", Page::Launcher),
+                // The highlight slides to the chosen page.
+                segmented(
+                    &["Theme", "Bar", "Launcher"],
+                    true,
+                    |s: &Appearance| PAGES.iter().position(|&p| p == s.page).unwrap_or(0),
+                    |i| Msg::Page(PAGES[i]),
+                )
+                .fixed(3 * 36 + 2 * 8),
                 spacer(),
                 text(|s: &Appearance| s.status.clone()).fixed(24),
             ])
             .fixed(170),
             column(vec![
-                theme_page().visible(|s: &Appearance| s.page == Page::Theme),
-                bar_page().visible(|s: &Appearance| s.page == Page::Bar),
-                launcher_page().visible(|s: &Appearance| s.page == Page::Launcher),
+                // Pages rise into place as they're switched to.
+                theme_page().transition(|s: &Appearance| s.page == Page::Theme),
+                bar_page().transition(|s: &Appearance| s.page == Page::Bar),
+                launcher_page().transition(|s: &Appearance| s.page == Page::Launcher),
             ]),
         ])
         .padding(16)
@@ -1208,9 +1202,13 @@ fn theme_page() -> Element<Appearance, Msg> {
     rows.extend([
         row(vec![
             label("Mode"),
-            mode_button("System", heroui::theme::Mode::System),
-            mode_button("Dark", heroui::theme::Mode::Dark),
-            mode_button("Light", heroui::theme::Mode::Light),
+            segmented(
+                &["System", "Dark", "Light"],
+                false,
+                |a: &Appearance| MODES.iter().position(|&m| m == a.theme.mode).unwrap_or(0),
+                |i| Msg::Mode(MODES[i]),
+            )
+            .fixed(3 * 90 + 2 * 8),
         ])
         .fixed(34),
         caption("System follows your desktop's dark/light setting.").fixed(20),
@@ -1322,15 +1320,7 @@ fn preset_card(i: usize) -> Element<Appearance, Msg> {
     })
 }
 
-/// One option of the mode selector; the chosen one is highlighted.
-fn mode_button(name: &str, mode: heroui::theme::Mode) -> Element<Appearance, Msg> {
-    column(vec![
-        primary_button(name, Msg::Mode(mode)).visible(move |a: &Appearance| a.theme.mode == mode).fixed(34),
-        button(name, Msg::Mode(mode)).visible(move |a: &Appearance| a.theme.mode != mode).fixed(34),
-    ])
-    .spacing(0)
-    .fixed(90)
-}
+const MODES: [heroui::theme::Mode; 3] = [heroui::theme::Mode::System, heroui::theme::Mode::Dark, heroui::theme::Mode::Light];
 
 /// A clickable accent color swatch.
 fn button_like_swatch(c: u32) -> Element<Appearance, Msg> {
