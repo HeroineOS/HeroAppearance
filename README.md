@@ -5,14 +5,15 @@ on [HeroUI](https://github.com/HeroineOS/HeroUI). It edits:
 
 - **The HeroUI theme**, used by every HeroUI program: ready-made themes (Heroine Dark/Light,
   Catppuccin, Nord, Gruvbox, Dracula, Tokyo Night, Rosé Pine, Everforest, Solarized, Claude Dark, Midnight)
-  to start from and tweak, mode (System follows the desktop's
+  to start from and tweak, your own saved themes (`~/.config/heroui/themes/`, the whole look
+  except animation settings) to come back to, mode (System follows the desktop's
   dark/light setting, or Dark, or Light; switching keeps your accent), accent swatches,
   every color (tap a color for a picker; a hex field is there for pasting), corner radius, spacing, padding, font and font size, and animations (off =
   reduced motion, saves battery). Appearance and every open HeroUI program re-skin live.
 - **[HeroBar](https://github.com/HeroineOS/HeroBar)**: position, height, reserved space,
   padding, spacing, colors and islands (sharp, rounded or pill), and the modules: a preview
   of the bar where you tap a module to edit it and drag it to reorder it or move it between
-  the left/center/right sections; add and remove modules; edit each one (format, interval,
+  the left/center/right sections (a row each); add and remove modules; edit each one (format, interval,
   text, command, on-click, icon, sizes; network display presets; volume, network and
   Bluetooth popups on or off), the taskbar (pinned apps, per-app or per-window
   buttons, width, current workspace only), workspaces, spacers (fixed or expanding, empty,
@@ -22,7 +23,7 @@ on [HeroUI](https://github.com/HeroineOS/HeroUI). It edits:
 - **[HeroLauncher](https://github.com/HeroineOS/HeroLauncher)**: layout, categories, size.
 - **[HeroWallpaper](https://github.com/HeroineOS/HeroWallpaper)**: a gallery of the
   pictures in your wallpaper folders (`~/Pictures/Wallpapers`, `~/Pictures`,
-  `/usr/share/backgrounds`...) or any file, scaling (fill, fit, stretch, center, tile),
+  `/usr/share/backgrounds`...) or any file (pictures and videos), scaling (fill, fit, stretch, center, tile),
   the color around it (the theme's or your own), crossfade length and animated pictures,
   for all screens or one. Thumbnails come from `herowallpaper thumbnail` (the shared
   freedesktop cache), so big photos aren't decoded here. Needs HeroWallpaper 0.1.1 or later.

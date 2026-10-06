@@ -232,14 +232,14 @@ pub fn editor() -> Element<Appearance, Msg> {
                 let r = t.radius.min(10);
                 // A box per section, its name at the left.
                 draw::set_font(t.font(), t.font_size - 2);
-                for s in 0..3 {
+                for (s, name) in SECTION_NAMES.iter().enumerate() {
                     let (bx, by, bw, bh) = row_rect(s, fr);
                     draw::set_draw_color(t.border);
                     draw::draw_rounded_rectf(bx, by, bw, bh, r);
                     draw::set_draw_color(t.background);
                     draw::draw_rounded_rectf(bx + 1, by + 1, bw - 2, bh - 2, (r - 1).max(0));
                     draw::set_draw_color(t.text_dim);
-                    draw::draw_text2(SECTION_NAMES[s], bx + 12, by, NAME_W - 12, bh, Align::Left | Align::Inside);
+                    draw::draw_text2(name, bx + 12, by, NAME_W - 12, bh, Align::Left | Align::Inside);
                     if st.sections[s].is_empty() && st.drag.is_none() {
                         let (ax, aw) = chip_area(s, fr);
                         draw::draw_text2("Empty", ax, by, aw, bh, Align::Center);

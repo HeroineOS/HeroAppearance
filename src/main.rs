@@ -6,6 +6,7 @@
 mod barconf;
 mod launcherconf;
 mod presets;
+mod saved;
 mod wallconf;
 mod layout;
 
@@ -101,6 +102,9 @@ struct Appearance {
     l_width: f64,
     l_height: f64,
     launcher_installed: bool,
+    /// Themes the user saved, and the name typed for the next one.
+    saved: Vec<(String, Theme)>,
+    save_name: String,
     // HeroWallpaper
     wall: Option<wallconf::WallDoc>,
     wall_dirty: bool,
@@ -300,6 +304,11 @@ enum Msg {
     LHeight(f64),
     /// Open the launcher to see the changes.
     TryLauncher,
+    // Saved themes
+    SaveName(String),
+    SaveTheme,
+    LoadSaved(usize),
+    DeleteSaved,
     // Wallpaper
     WScanned(Vec<std::path::PathBuf>),
     WThumbs(Vec<(std::path::PathBuf, Option<std::path::PathBuf>)>),
@@ -377,6 +386,8 @@ impl Appearance {
             l_width: 0.0,
             l_height: 540.0,
             launcher_installed: installed("herolauncher"),
+            saved: saved::load_all(),
+            save_name: String::new(),
             wall: wallconf::WallDoc::load(wallconf::default_path()).ok(),
             wall_dirty: false,
             w_loaded: false,
@@ -792,6 +803,35 @@ impl App for Appearance {
                 self.theme.animations = old.animations;
                 self.theme.icon_theme = old.icon_theme;
                 return self.touched(true);
+            }
+            Msg::SaveName(n) => self.save_name = n,
+            Msg::SaveTheme => {
+                let name = self.save_name.trim().to_string();
+                if name.is_empty() {
+                    self.status = "Name it first".into();
+                    return Task::none();
+                }
+                self.status = match saved::save(&name, &self.theme) {
+                    Ok(()) => format!("Saved \"{name}\""),
+                    Err(e) => format!("Couldn't save it: {e}"),
+                };
+                self.save_name.clear();
+                self.saved = saved::load_all();
+            }
+            Msg::LoadSaved(i) => {
+                if let Some((_, t)) = self.saved.get(i) {
+                    self.theme = saved::applied(t, &self.theme);
+                    return self.touched(true);
+                }
+            }
+            Msg::DeleteSaved => {
+                if let Some((name, _)) = self.saved.iter().find(|(_, t)| saved::same(t, &self.theme)) {
+                    self.status = match saved::delete(name) {
+                        Ok(()) => format!("Deleted \"{name}\""),
+                        Err(e) => format!("Couldn't delete it: {e}"),
+                    };
+                    self.saved = saved::load_all();
+                }
             }
             Msg::Preset(i) => {
                 self.theme = presets::PRESETS[i].apply(&self.theme);
@@ -1659,6 +1699,22 @@ fn theme_page() -> Element<Appearance, Msg> {
         rows.push(row(cards.collect()).fixed(60));
     }
     rows.extend([
+        label("My themes").fixed(24),
+        caption("Save the theme as it is now, to come back to it any time.").fixed(20),
+        list(|a: &Appearance| a.saved.len().div_ceil(4), |r| row((0..4).map(|k| saved_card(r * 4 + k)).collect()).fixed(60)),
+        row(vec![
+            text_input_submit(|a: &Appearance| a.save_name.clone(), Msg::SaveName, Msg::SaveTheme),
+            primary_button("Save", Msg::SaveTheme).fixed(90),
+        ])
+        .fixed(34),
+        row(vec![
+            caption_text(|a: &Appearance| a.saved.iter().find(|(_, t)| saved::same(t, &a.theme)).map(|(n, _)| format!("This is \"{n}\".")).unwrap_or_default()),
+            button("Delete it", Msg::DeleteSaved).fixed(110),
+        ])
+        .fixed(34)
+        .visible(|a: &Appearance| a.saved.iter().any(|(_, t)| saved::same(t, &a.theme))),
+    ]);
+    rows.extend([
         row(vec![
             label("Mode"),
             segmented(
@@ -1782,6 +1838,64 @@ fn preset_card(i: usize) -> Element<Appearance, Msg> {
         ctx.bind(move |a: &Appearance| {
             let now = presets::PRESETS[i].matches(&a.theme);
             if on.replace(now) != now {
+                heroui::widgets::repaint(&mut w);
+            }
+        });
+        b.as_base_widget()
+    })
+}
+
+/// A saved theme's card: its colors and name, like the presets'. Empty
+/// (and inert) past the end of the list.
+fn saved_card(i: usize) -> Element<Appearance, Msg> {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    Element::new(move |ctx| {
+        // The theme shown, and whether it's the current one.
+        let shown: Rc<RefCell<Option<(String, Theme, bool)>>> = Rc::default();
+        let mut b = custom_button({
+            let shown = shown.clone();
+            move |b| {
+                let Some((name, p, on)) = &*shown.borrow() else { return };
+                let t = heroui::theme::current();
+                let (x, y, w, h) = (b.x() + 2, b.y() + 2, b.w() - 4, b.h() - 4);
+                let r = t.radius.min(10);
+                let a = heroui::hover::hover_amount(b);
+                let ring = if *on { Some(t.accent) } else if a > 0.0 { Some(heroui::widgets::mix(t.background, t.text_dim, a)) } else { None };
+                if let Some(ring) = ring {
+                    draw::set_draw_color(ring);
+                    draw::draw_rounded_rectf(x - 2, y - 2, w + 4, h + 4, r + 2);
+                }
+                let pr = p.radius.min(10);
+                draw::set_draw_color(p.border);
+                draw::draw_rounded_rectf(x, y, w, h, pr);
+                draw::set_draw_color(p.background);
+                draw::draw_rounded_rectf(x + 1, y + 1, w - 2, h - 2, (pr - 1).max(0));
+                draw::set_draw_color(p.surface);
+                draw::draw_rounded_rectf(x + 8, y + h - 20, w - 16, 12, 4);
+                draw::set_draw_color(p.accent);
+                draw::draw_rounded_rectf(x + w - 34, y + h - 18, 22, 8, 4);
+                draw::set_draw_color(p.text_dim);
+                draw::draw_rounded_rectf(x + 14, y + h - 16, (w / 3).min(40), 4, 2);
+                draw::set_font(t.font(), (t.font_size - 1).max(9));
+                draw::set_draw_color(p.text);
+                draw::draw_text2(name, x + 8, y + 4, w - 16, h - 26, Align::Left | Align::Inside | Align::Clip);
+            }
+        });
+        let emit = ctx.emitter();
+        {
+            let shown = shown.clone();
+            b.set_callback(move |_| {
+                if shown.borrow().is_some() {
+                    emit(Msg::LoadSaved(i));
+                }
+            });
+        }
+        let mut w = b.clone();
+        ctx.bind(move |a: &Appearance| {
+            let now = a.saved.get(i).map(|(n, t)| (n.clone(), t.clone(), saved::same(t, &a.theme)));
+            if *shown.borrow() != now {
+                *shown.borrow_mut() = now;
                 heroui::widgets::repaint(&mut w);
             }
         });
