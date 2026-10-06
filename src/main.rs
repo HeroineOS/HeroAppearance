@@ -1201,7 +1201,9 @@ fn theme_page() -> Element<Appearance, Msg> {
         caption("Pick one, then change any color below to make it yours.").fixed(20),
     ];
     for chunk in (0..presets::PRESETS.len()).collect::<Vec<_>>().chunks(4) {
-        rows.push(row(chunk.iter().map(|&i| preset_card(i)).collect()).fixed(60));
+        // A short last row keeps the cards' width.
+        let cards = chunk.iter().map(|&i| preset_card(i)).chain(std::iter::repeat_with(spacer).take(4 - chunk.len()));
+        rows.push(row(cards.collect()).fixed(60));
     }
     rows.extend([
         row(vec![

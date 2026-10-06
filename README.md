@@ -4,7 +4,7 @@
 on [HeroUI](https://github.com/HeroineOS/HeroUI). It edits:
 
 - **The HeroUI theme**, used by every HeroUI program: ready-made themes (Heroine Dark/Light,
-  Catppuccin, Nord, Gruvbox, Dracula, Tokyo Night, Rosé Pine, Everforest, Solarized, Midnight)
+  Catppuccin, Nord, Gruvbox, Dracula, Tokyo Night, Rosé Pine, Everforest, Solarized, Claude Dark, Midnight)
   to start from and tweak, mode (System follows the desktop's
   dark/light setting, or Dark, or Light; switching keeps your accent), accent swatches,
   every color (tap a color for a picker; a hex field is there for pasting), corner radius, spacing, padding, font and font size, and animations (off =
