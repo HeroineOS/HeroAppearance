@@ -69,6 +69,9 @@ struct State {
     compact: std::cell::Cell<bool>,
     /// The chip under the pointer (section * 1000 + index), fading.
     hover: heroui::hover::HoverFade,
+    /// Chips glide to new spots after a move; new ones pop in, removed
+    /// ones fade (keyed by module name; ghosts keep label and icon).
+    glide: heroui::glide::Glides<(String, String, bool)>,
 }
 
 /// A chip's hover key.
@@ -235,14 +238,25 @@ pub fn editor() -> Element<Appearance, Msg> {
                 let skip = dragging.map(|d| d.from);
                 let (cy, ch) = (y + 8, h - 30);
                 draw::set_font(t.font(), t.font_size - 1);
+                let paint_chip = |(label, icon, selected): &(String, String, bool), a: f32, (cx, cw): (i32, i32)| {
+                    draw::set_draw_color(if *selected { heroui::widgets::mix(t.accent, t.text, 0.15 * a) } else { heroui::widgets::mix(t.surface_alt, t.accent, 0.3 * a) });
+                    draw::draw_rounded_rectf(cx, cy, cw, ch, t.radius.min(ch / 2));
+                    chip_content(label, icon, compact, (cx, cy, cw, ch), if *selected { t.accent_text } else { t.text });
+                };
+                st.glide.begin(&f.as_base_widget());
                 for c in layout(&st, x, w, skip) {
                     let (name, label, icon) = &st.sections[c.section][c.index];
-                    let selected = st.selected.as_deref() == Some(name.as_str());
+                    let item = (label.clone(), icon.clone(), st.selected.as_deref() == Some(name.as_str()));
                     let a = if dragging.is_some() { 0.0 } else { st.hover.amount(key(c.section, c.index)) };
-                    draw::set_draw_color(if selected { heroui::widgets::mix(t.accent, t.text, 0.15 * a) } else { heroui::widgets::mix(t.surface_alt, t.accent, 0.3 * a) });
-                    draw::draw_rounded_rectf(c.x, cy, c.w, ch, t.radius.min(ch / 2));
-                    chip_content(label, icon, compact, (c.x, cy, c.w, ch), if selected { t.accent_text } else { t.text });
+                    let ((gx, _, gw), pop) = st.glide.place(name, (c.x - x, 0, c.w), &item);
+                    heroui::fx::draw_scaled((x + gx, cy, gw, ch), 0.6 + 0.4 * pop, pop.clamp(0.0, 1.0), || paint_chip(&item, a, (x + gx, gw)));
                 }
+                if let Some(d) = dragging {
+                    st.glide.keep(&st.sections[d.from.0][d.from.1].0);
+                }
+                st.glide.end(|item, (gx, _, gw), a| {
+                    heroui::fx::draw_scaled((x + gx, cy, gw, ch), 0.5 + 0.5 * a, a, || paint_chip(item, 0.0, (x + gx, gw)));
+                });
                 // The dragged chip follows the pointer; a marker shows where
                 // it will land.
                 if let Some(d) = dragging {
