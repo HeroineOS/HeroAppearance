@@ -15,10 +15,18 @@ pub struct Preset {
     pub text_dim: u32,
     pub accent: u32,
     pub border: u32,
+    /// Text on the accent (None: black or white, whichever reads better).
+    pub accent_text: Option<u32>,
 }
 
 const fn p(name: &'static str, dark: bool, [background, surface, surface_alt, text, text_dim, accent, border]: [u32; 7]) -> Preset {
-    Preset { name, dark, background, surface, surface_alt, text, text_dim, accent, border }
+    Preset { name, dark, background, surface, surface_alt, text, text_dim, accent, border, accent_text: None }
+}
+
+impl Preset {
+    const fn on_accent(self, c: u32) -> Preset {
+        Preset { accent_text: Some(c), ..self }
+    }
 }
 
 /// background, surface, surface_alt, text, text_dim, accent, border
@@ -34,8 +42,10 @@ pub const PRESETS: &[Preset] = &[
     p("Rosé Pine", true, [0x191724, 0x1f1d2e, 0x26233a, 0xe0def4, 0x908caa, 0xebbcba, 0x403d52]),
     p("Everforest", true, [0x2d353b, 0x343f44, 0x3d484d, 0xd3c6aa, 0x9da9a0, 0xa7c080, 0x475258]),
     p("Solarized Light", false, [0xfdf6e3, 0xeee8d5, 0xe4ddc8, 0x586e75, 0x839496, 0x268bd2, 0xd6cfb8]),
-    // Close to the dark mode of Claude's apps: warm grays, its clay orange.
-    p("Claude Dark", true, [0x262624, 0x30302e, 0x3a3a37, 0xfaf9f5, 0xa6a39a, 0xd97757, 0x45443f]),
+    // Claude Desktop's dark mode (its stylesheet's tokens): the neutral
+    // content pane and sidebar, warm input fields, clay accent with white
+    // text, borders white at 10%.
+    p("Claude Dark", true, [0x1a1a1a, 0x262626, 0x30302e, 0xfaf9f5, 0x9c9a92, 0xd97757, 0x313131]).on_accent(0xffffff),
     p("Midnight", true, [0x0a0a0a, 0x141414, 0x1c1c1c, 0xf0f0f0, 0x8a8a8a, 0x4f9dff, 0x2a2a2a]),
 ];
 
@@ -51,7 +61,7 @@ impl Preset {
             text: c(self.text),
             text_dim: c(self.text_dim),
             accent: c(self.accent),
-            accent_text: heroui::theme::contrast_text(c(self.accent)),
+            accent_text: self.accent_text.map_or_else(|| heroui::theme::contrast_text(c(self.accent)), c),
             border: c(self.border),
             ..theme.clone()
         }
@@ -62,6 +72,7 @@ impl Preset {
         let t = self.apply(theme);
         (t.background, t.surface, t.surface_alt, t.text, t.text_dim, t.accent, t.border)
             == (theme.background, theme.surface, theme.surface_alt, theme.text, theme.text_dim, theme.accent, theme.border)
+            && (self.accent_text.is_none() || t.accent_text == theme.accent_text)
     }
 }
 
