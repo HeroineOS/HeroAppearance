@@ -2227,7 +2227,7 @@ fn bar_page() -> Element<Appearance, Msg> {
     ];
     rows.extend([
         caption("Tap a module to edit it; drag it to move it, also between sections.").fixed(20),
-        layout::editor().fixed(76),
+        layout::editor().fixed(layout::HEIGHT),
         row(vec![
             label("Add").fixed(40),
             dropdown(|_: &Appearance| KIND_LABELS, |a: &Appearance| a.add_kind, Msg::AddKind),
