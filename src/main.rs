@@ -196,6 +196,7 @@ enum Msg {
     FontSize(f64),
     Font(String),
     Animations(bool),
+    FrameRate(usize),
     // Bar
     Position(usize),
     Height(f64),
@@ -591,6 +592,10 @@ impl App for Appearance {
             }
             Msg::Animations(on) => {
                 self.theme.animations = on;
+                return self.touched(true);
+            }
+            Msg::FrameRate(i) => {
+                self.theme.frame_rate = FRAME_RATES[i].0;
                 return self.touched(true);
             }
 
@@ -1267,6 +1272,16 @@ fn theme_page() -> Element<Appearance, Msg> {
         )
         .fixed(30),
         caption("Off: changes happen instantly (reduced motion, saves battery).").fixed(20),
+        setting(
+            "Animation frame rate",
+            dropdown(
+                |_: &Appearance| FRAME_RATE_LABELS,
+                |a: &Appearance| FRAME_RATES.iter().position(|&(f, _)| f == a.theme.frame_rate).unwrap_or(0),
+                Msg::FrameRate,
+            ),
+            200,
+        ),
+        caption("Your screen's refresh rate looks smoothest. Only used while something moves.").fixed(20),
     ]);
     scroll(rows)
 }
@@ -1319,6 +1334,10 @@ fn preset_card(i: usize) -> Element<Appearance, Msg> {
         b.as_base_widget()
     })
 }
+
+/// Animation frame rates offered (frames per second, label).
+const FRAME_RATES: [(i32, &str); 6] = [(60, "60 (most screens)"), (75, "75"), (90, "90"), (120, "120"), (144, "144"), (165, "165")];
+const FRAME_RATE_LABELS: &[&str] = &["60 (most screens)", "75", "90", "120", "144", "165"];
 
 const MODES: [heroui::theme::Mode; 3] = [heroui::theme::Mode::System, heroui::theme::Mode::Dark, heroui::theme::Mode::Light];
 
