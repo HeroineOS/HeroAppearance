@@ -713,8 +713,8 @@ impl App for Appearance {
             Msg::WBrowse => {
                 use heroui::fltk::dialog::{NativeFileChooser, NativeFileChooserType};
                 let mut fc = NativeFileChooser::new(NativeFileChooserType::BrowseFile);
-                fc.set_title("Choose a wallpaper");
-                fc.set_filter(&format!("Pictures\t*.{{{}}}", wallconf::EXTENSIONS.join(",")));
+                fc.set_title("Choose a picture or video");
+                fc.set_filter(&format!("Pictures and videos\t*.{{{}}}", wallconf::EXTENSIONS.join(",")));
                 if let Some(home) = std::env::var_os("HOME") {
                     let _ = fc.set_directory(&std::path::PathBuf::from(home).join("Pictures"));
                 }
@@ -1487,8 +1487,8 @@ fn wallpaper_page() -> Element<Appearance, Msg> {
         .visible(|a: &Appearance| !a.w_theme_color),
         label("All screens").fixed(24),
         int_slider("Crossfade (ms)", 0.0..=1500.0, |a| a.w_transition, Msg::WTransition),
-        toggle("Play animated pictures (GIF, APNG, WebP)", |a: &Appearance| a.w_animate, Msg::WAnimate).fixed(30),
-        caption("They hold still while animations are off (Theme page), as in battery saver.").fixed(20),
+        toggle("Play videos and animated pictures", |a: &Appearance| a.w_animate, Msg::WAnimate).fixed(30),
+        caption("They hold still while animations are off (Theme page), as in battery saver. Videos need FFmpeg.").fixed(20),
     ])
 }
 

@@ -13,8 +13,11 @@ pub const MODES: [(&str, &str); 5] = [("cover", "Fill"), ("contain", "Fit"), ("s
 /// Used when the file doesn't exist and herowallpaper isn't installed.
 const FALLBACK: &str = "# HeroWallpaper\nmode = \"cover\"\n";
 
-/// Picture files the wallpaper shows.
-pub const EXTENSIONS: [&str; 11] = ["jpg", "jpeg", "png", "apng", "gif", "webp", "avif", "bmp", "tif", "tiff", "qoi"];
+/// Files the wallpaper shows: pictures, then videos.
+pub const EXTENSIONS: [&str; 22] = [
+    "jpg", "jpeg", "png", "apng", "gif", "webp", "avif", "bmp", "tif", "tiff", "qoi", "mp4", "m4v", "mkv", "webm", "mov", "avi", "ogv", "mpg", "mpeg", "ts",
+    "wmv",
+];
 
 pub struct WallDoc {
     path: PathBuf,
