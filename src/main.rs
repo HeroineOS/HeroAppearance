@@ -322,6 +322,7 @@ enum Msg {
     WPathTyped(String),
     WPathSubmit,
     WBrowse,
+    WBrowsed(Vec<std::path::PathBuf>),
     WMode(usize),
     WThemeColor(bool),
     WColor(Color),
@@ -722,16 +723,24 @@ impl App for Appearance {
                 return self.wall_pick(path);
             }
             Msg::WBrowse => {
-                use heroui::fltk::dialog::{NativeFileChooser, NativeFileChooserType};
-                let mut fc = NativeFileChooser::new(NativeFileChooserType::BrowseFile);
-                fc.set_title("Choose a picture or video");
-                fc.set_filter(&format!("Pictures and videos\t*.{{{}}}", wallconf::EXTENSIONS.join(",")));
-                if let Some(home) = std::env::var_os("HOME") {
-                    let _ = fc.set_directory(&std::path::PathBuf::from(home).join("Pictures"));
-                }
-                fc.show();
-                let f = fc.filename();
-                if f.is_file() {
+                // The desktop's own open dialog (HeroPortal on HeroWM).
+                let globs = |exts: &[&str]| exts.iter().map(|e| format!("*.{e}")).collect::<Vec<_>>();
+                let (pictures, videos) = wallconf::EXTENSIONS.split_at(11);
+                let options = heroui::file_dialog::Options {
+                    title: "Choose a picture or video".into(),
+                    filters: vec![
+                        ("Pictures and videos".into(), globs(wallconf::EXTENSIONS.as_slice())),
+                        ("Pictures".into(), globs(pictures)),
+                        ("Videos".into(), globs(videos)),
+                    ],
+                    folder: std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Pictures")).filter(|p| p.is_dir()),
+                    accept: Some("Choose".into()),
+                    ..Default::default()
+                };
+                return heroui::file_dialog::open(options, Msg::WBrowsed);
+            }
+            Msg::WBrowsed(paths) => {
+                if let Some(f) = paths.into_iter().next().filter(|f| f.is_file()) {
                     return self.wall_pick(f.to_string_lossy().into_owned());
                 }
             }

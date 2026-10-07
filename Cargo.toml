@@ -7,7 +7,8 @@ license = "MIT OR Apache-2.0"
 edition = "2021"
 
 [dependencies]
-heroui = { git = "https://github.com/HeroineOS/HeroUI" }
+# layer-shell: the fork's Wayland extras (file dialogs float over the window).
+heroui = { git = "https://github.com/HeroineOS/HeroUI", features = ["layer-shell"] }
 toml_edit = { version = "0.23", default-features = false, features = ["parse", "display"] }
 
 # HeroineOS apps use the HeroineOS fltk-sys fork (Wayland touch input; same
