@@ -112,6 +112,11 @@ struct Appearance {
     w_loaded: bool,
     w_installed: bool,
     w_running: bool,
+    /// What went wrong last in the running wallpaper ("" if nothing).
+    w_problem: String,
+    /// The running wallpaper's version and pid, when older than the
+    /// installed one (started before an update).
+    w_outdated: Option<(String, String)>,
     /// "All screens", then each screen's name.
     w_outputs: Vec<String>,
     w_output: usize,
@@ -313,7 +318,10 @@ enum Msg {
     WScanned(Vec<std::path::PathBuf>),
     WThumbs(Vec<(std::path::PathBuf, Option<std::path::PathBuf>)>),
     WOutputs(Vec<String>),
-    WRunning(bool),
+    /// `herowallpaper --status`: running, its version, pid, last problem;
+    /// and the installed version.
+    WStatus(bool, String, String, String, String),
+    WRestart,
     WStart,
     WOutput(usize),
     WSameAsAll,
@@ -394,6 +402,8 @@ impl Appearance {
             w_loaded: false,
             w_installed: installed("herowallpaper"),
             w_running: false,
+            w_problem: String::new(),
+            w_outdated: None,
             w_outputs: vec!["All screens".into()],
             w_output: 0,
             w_own: false,
@@ -496,7 +506,8 @@ impl Appearance {
                 more = self.next_thumbs();
             }
         }
-        Task::batch([self.wall_set("path", path, false), more])
+        // Whether it could show it (a video without FFmpeg, a broken file).
+        Task::batch([self.wall_set("path", path, false), more, check_running(2500)])
     }
 
     fn read_bar(&mut self) {
@@ -690,7 +701,19 @@ impl App for Appearance {
                 self.w_outputs = std::iter::once("All screens".to_string()).chain(names).collect();
                 self.w_output = self.w_output.min(self.w_outputs.len() - 1);
             }
-            Msg::WRunning(on) => self.w_running = on,
+            Msg::WStatus(running, version, pid, problem, installed) => {
+                self.w_running = running;
+                self.w_problem = problem;
+                self.w_outdated = (running && !installed.is_empty() && version != installed).then_some((version, pid));
+            }
+            Msg::WRestart => {
+                if let Some((_, pid)) = self.w_outdated.take() {
+                    let _ = std::process::Command::new("kill").arg(&pid).status();
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+                let _ = heroui::process::launch("herowallpaper");
+                return check_running(800);
+            }
             Msg::WStart => {
                 let _ = heroui::process::launch("herowallpaper");
                 return check_running(600);
@@ -1490,12 +1513,27 @@ fn installed(program: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(program).is_file()))
 }
 
-/// Asks (after `delay_ms`) whether the wallpaper is running.
+/// Asks (after `delay_ms`) how the wallpaper is doing.
 fn check_running(delay_ms: u64) -> Task<Msg> {
     Task::perform(move || {
         std::thread::sleep(Duration::from_millis(delay_ms));
-        let ok = std::process::Command::new("herowallpaper").arg("--running").status().is_ok_and(|s| s.success());
-        Msg::WRunning(ok)
+        let run = |arg: &str| std::process::Command::new("herowallpaper").arg(arg).output().ok().map(|o| (o.status.success(), String::from_utf8_lossy(&o.stdout).into_owned()));
+        // "running VERSION PID\nPROBLEM..." or "not running"
+        let (running, text) = run("--status").unwrap_or((false, String::new()));
+        let mut lines = text.lines();
+        let first: Vec<&str> = lines.next().unwrap_or("").split_whitespace().collect();
+        let (version, pid) = (first.get(1).unwrap_or(&"").to_string(), first.get(2).unwrap_or(&"").to_string());
+        // The last line says it best ("Invalid data found..."), without the path.
+        let problem = lines.filter(|l| !l.trim().is_empty()).last().unwrap_or("").to_string();
+        let problem = problem.split_once(": ").filter(|(p, _)| p.starts_with('/')).map_or(problem.clone(), |(_, rest)| rest.to_string());
+        // An older wallpaper (before --status) answers with its usage.
+        let (running, version) = if running && first.first() != Some(&"running") {
+            (run("--running").is_some_and(|(ok, _)| ok), "an older version".to_string())
+        } else {
+            (running, version)
+        };
+        let installed = run("--version").map(|(_, v)| v.split_whitespace().nth(1).unwrap_or("").to_string()).unwrap_or_default();
+        Msg::WStatus(running, version, pid, problem, installed)
     })
 }
 
@@ -1510,6 +1548,18 @@ fn wallpaper_page() -> Element<Appearance, Msg> {
             .fixed(34)
             .visible(|a: &Appearance| a.w_installed && !a.w_running),
         caption("Not installed? Install the herowallpaper package.").fixed(20).visible(|a: &Appearance| !a.w_installed),
+        row(vec![
+            text(|a: &Appearance| match &a.w_outdated {
+                Some((v, _)) => format!("The running wallpaper is {v}, from before the update."),
+                None => String::new(),
+            }),
+            primary_button("Restart it", Msg::WRestart).fixed(120),
+        ])
+        .fixed(34)
+        .visible(|a: &Appearance| a.w_outdated.is_some()),
+        text(|a: &Appearance| if a.w_problem.is_empty() { String::new() } else { format!("Couldn't show it: {}", a.w_problem) })
+            .fixed(24)
+            .visible(|a: &Appearance| !a.w_problem.is_empty()),
         setting("Screen", dropdown(|a: &Appearance| &a.w_outputs[..], |a: &Appearance| a.w_output, Msg::WOutput), 260)
             .visible(|a: &Appearance| a.w_outputs.len() > 2),
         row(vec![caption("This screen has its own picture."), spacer(), button("Same as all screens", Msg::WSameAsAll).fixed(180)])
