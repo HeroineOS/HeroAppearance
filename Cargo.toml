@@ -1,6 +1,6 @@
 [package]
 name = "heroappearance"
-version = "0.1.20"
+version = "0.1.21"
 description = "Appearance: customize the HeroUI theme and HeroBar"
 repository = "https://github.com/HeroineOS/HeroAppearance"
 license = "MIT OR Apache-2.0"
