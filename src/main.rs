@@ -1524,7 +1524,7 @@ fn check_running(delay_ms: u64) -> Task<Msg> {
         let first: Vec<&str> = lines.next().unwrap_or("").split_whitespace().collect();
         let (version, pid) = (first.get(1).unwrap_or(&"").to_string(), first.get(2).unwrap_or(&"").to_string());
         // The last line says it best ("Invalid data found..."), without the path.
-        let problem = lines.filter(|l| !l.trim().is_empty()).last().unwrap_or("").to_string();
+        let problem = lines.filter(|l| !l.trim().is_empty()).next_back().unwrap_or("").to_string();
         let problem = problem.split_once(": ").filter(|(p, _)| p.starts_with('/')).map_or(problem.clone(), |(_, rest)| rest.to_string());
         // An older wallpaper (before --status) answers with its usage.
         let (running, version) = if running && first.first() != Some(&"running") {
