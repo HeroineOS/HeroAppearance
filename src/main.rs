@@ -2558,6 +2558,11 @@ fn bar_page() -> Element<Appearance, Msg> {
 }
 
 fn main() {
+    heroui::simple_args(
+        "heroappearance",
+        env!("CARGO_PKG_VERSION"),
+        "Appearance: the HeroUI theme, HeroBar, HeroLauncher and HeroWallpaper settings.",
+    );
     let settings = Settings::new("Appearance")
         .size(820, 640)
         .class("heroappearance");
