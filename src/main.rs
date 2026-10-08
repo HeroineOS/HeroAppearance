@@ -116,6 +116,8 @@ struct Appearance {
     w_problem: String,
     /// HeroWallpaper is making a copy of the video fitted to the screen.
     w_preparing: bool,
+    /// ...and waits for free memory first.
+    w_waiting: bool,
     /// The running wallpaper's version and pid, when older than the
     /// installed one (started before an update).
     w_outdated: Option<(String, String)>,
@@ -323,7 +325,7 @@ enum Msg {
     /// `herowallpaper --status`: running, its version, pid, last problem;
     /// and the installed version.
     /// Running, version, pid, problem, installed version, making a fitted video copy.
-    WStatus(bool, String, String, String, String, bool),
+    WStatus(bool, String, String, String, String, bool, bool),
     WRestart,
     WStart,
     WOutput(usize),
@@ -407,6 +409,7 @@ impl Appearance {
             w_running: false,
             w_problem: String::new(),
             w_preparing: false,
+            w_waiting: false,
             w_outdated: None,
             w_outputs: vec!["All screens".into()],
             w_output: 0,
@@ -705,10 +708,11 @@ impl App for Appearance {
                 self.w_outputs = std::iter::once("All screens".to_string()).chain(names).collect();
                 self.w_output = self.w_output.min(self.w_outputs.len() - 1);
             }
-            Msg::WStatus(running, version, pid, problem, installed, preparing) => {
+            Msg::WStatus(running, version, pid, problem, installed, preparing, waiting) => {
                 self.w_running = running;
                 self.w_problem = problem;
                 self.w_preparing = preparing;
+                self.w_waiting = waiting;
                 self.w_outdated = (running && !installed.is_empty() && version != installed).then_some((version, pid));
                 if preparing {
                     // Until it's done.
@@ -1532,6 +1536,7 @@ fn check_running(delay_ms: u64) -> Task<Msg> {
         let mut lines = text.lines();
         let first_line = lines.next().unwrap_or("");
         let preparing = first_line.contains(" - preparing ");
+        let waiting = first_line.ends_with("waiting for free memory");
         let first: Vec<&str> = first_line.split_whitespace().collect();
         let (version, pid) = (first.get(1).unwrap_or(&"").to_string(), first.get(2).unwrap_or(&"").to_string());
         // The last line says it best ("Invalid data found..."), without the path.
@@ -1544,7 +1549,7 @@ fn check_running(delay_ms: u64) -> Task<Msg> {
             (running, version)
         };
         let installed = run("--version").map(|(_, v)| v.split_whitespace().nth(1).unwrap_or("").to_string()).unwrap_or_default();
-        Msg::WStatus(running, version, pid, problem, installed, preparing)
+        Msg::WStatus(running, version, pid, problem, installed, preparing, waiting)
     })
 }
 
@@ -1568,7 +1573,15 @@ fn wallpaper_page() -> Element<Appearance, Msg> {
         ])
         .fixed(34)
         .visible(|a: &Appearance| a.w_outdated.is_some()),
-        caption("Preparing this video for your screen (only once): it shows as a still until it's ready.").fixed(24).visible(|a: &Appearance| a.w_preparing),
+        text(|a: &Appearance| {
+            if a.w_waiting {
+                "Waiting for free memory to prepare this video for your screen: it shows as a still until then.".to_string()
+            } else {
+                "Preparing this video for your screen (only once): it shows as a still until it's ready.".to_string()
+            }
+        })
+        .fixed(24)
+        .visible(|a: &Appearance| a.w_preparing),
         text(|a: &Appearance| if a.w_problem.is_empty() { String::new() } else { format!("Couldn't show it: {}", a.w_problem) })
             .fixed(24)
             .visible(|a: &Appearance| !a.w_problem.is_empty()),
