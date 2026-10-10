@@ -5,6 +5,7 @@
 
 mod barconf;
 mod launcherconf;
+mod notifconf;
 mod presets;
 mod saved;
 mod wallconf;
@@ -25,6 +26,7 @@ enum Page {
     Bar,
     Launcher,
     Wallpaper,
+    Notifications,
 }
 
 /// Editable theme colors: (label, getter, setter).
@@ -101,6 +103,14 @@ struct Appearance {
     l_categories: bool,
     l_width: f64,
     l_height: f64,
+    /// HeroNotify's settings, read when the page opens.
+    n: notifconf::Settings,
+    /// What's being typed: an app to let through, a schedule's times.
+    n_app: String,
+    n_from: String,
+    n_to: String,
+    n_days: usize,
+    n_installed: bool,
     launcher_installed: bool,
     /// Themes the user saved, and the name typed for the next one.
     saved: Vec<(String, Theme)>,
@@ -311,6 +321,21 @@ enum Msg {
     LCategories(bool),
     LWidth(f64),
     LHeight(f64),
+    NPosition(usize),
+    NTimeout(f64),
+    NMaxShown(f64),
+    NWidth(f64),
+    NDnd(bool),
+    NUrgent(bool),
+    NApp(String),
+    NAppAdd,
+    NAppRemove(usize),
+    NFrom(String),
+    NTo(String),
+    NDays(usize),
+    NQuietAdd,
+    NQuietRemove(usize),
+    NTest,
     /// Open the launcher to see the changes.
     TryLauncher,
     // Saved themes
@@ -399,6 +424,12 @@ impl Appearance {
             l_categories: true,
             l_width: 0.0,
             l_height: 540.0,
+            n: notifconf::read(),
+            n_app: String::new(),
+            n_from: "22:00".into(),
+            n_to: "07:00".into(),
+            n_days: 0,
+            n_installed: installed("heronotify"),
             launcher_installed: installed("herolauncher"),
             saved: saved::load_all(),
             save_name: String::new(),
@@ -613,6 +644,15 @@ impl Appearance {
     }
 
     /// Writes a key of HeroLauncher's config (debounced).
+    /// Says how saving HeroNotify's settings went.
+    fn notif_saved(&mut self, r: Result<(), String>) -> Task<Msg> {
+        self.status = match r {
+            Ok(()) => "Saved".into(),
+            Err(e) => format!("notifications: {e}"),
+        };
+        Task::none()
+    }
+
     fn launcher_set(&mut self, key: &str, v: impl Into<toml_edit::Value>) -> Task<Msg> {
         let Some(d) = self.launcher.as_mut() else { return Task::none() };
         d.set(key, v);
@@ -682,6 +722,10 @@ impl App for Appearance {
         match msg {
             Msg::Page(p) => {
                 self.page = p;
+                if p == Page::Notifications {
+                    // HeroBar's switch may have changed it.
+                    self.n = notifconf::read();
+                }
                 if p == Page::Wallpaper && !std::mem::replace(&mut self.w_loaded, true) {
                     return self.wall_load();
                 }
@@ -825,6 +869,72 @@ impl App for Appearance {
             Msg::LHeight(v) => {
                 self.l_height = v.round();
                 return self.launcher_set("height", v.round() as i64);
+            }
+            Msg::NPosition(i) => {
+                self.n.position = i;
+                return self.notif_saved(notifconf::set("position", notifconf::POSITIONS[i.min(5)].0));
+            }
+            Msg::NTimeout(v) => {
+                self.n.timeout = v.round() as i64;
+                return self.notif_saved(notifconf::set("timeout", self.n.timeout));
+            }
+            Msg::NMaxShown(v) => {
+                self.n.max_shown = v.round() as i64;
+                return self.notif_saved(notifconf::set("max-shown", self.n.max_shown));
+            }
+            Msg::NWidth(v) => {
+                self.n.width = v.round() as i64;
+                return self.notif_saved(notifconf::set("width", self.n.width));
+            }
+            Msg::NDnd(on) => {
+                self.n.dnd = on;
+                return self.notif_saved(notifconf::set_dnd("on", on));
+            }
+            Msg::NUrgent(on) => {
+                self.n.urgent = on;
+                return self.notif_saved(notifconf::set_dnd("urgent", on));
+            }
+            Msg::NApp(t) => self.n_app = t,
+            Msg::NAppAdd => {
+                let app = self.n_app.trim().to_string();
+                if app.is_empty() || self.n.allow.iter().any(|a| a.eq_ignore_ascii_case(&app)) {
+                    return Task::none();
+                }
+                self.n.allow.push(app);
+                self.n_app.clear();
+                return self.notif_saved(notifconf::set_allow(&self.n.allow));
+            }
+            Msg::NAppRemove(k) => {
+                if k < self.n.allow.len() {
+                    self.n.allow.remove(k);
+                    return self.notif_saved(notifconf::set_allow(&self.n.allow));
+                }
+            }
+            Msg::NFrom(t) => self.n_from = t,
+            Msg::NTo(t) => self.n_to = t,
+            Msg::NDays(i) => self.n_days = i,
+            Msg::NQuietAdd => {
+                let (Some(from), Some(to)) = (notifconf::time(&self.n_from), notifconf::time(&self.n_to)) else {
+                    self.status = "Times look like 22:00".into();
+                    return Task::none();
+                };
+                let days = notifconf::DAYS[self.n_days.min(2)].1.iter().map(|d| d.to_string()).collect();
+                self.n.schedule.push(notifconf::Quiet { from, to, days });
+                return self.notif_saved(notifconf::set_schedule(&self.n.schedule));
+            }
+            Msg::NQuietRemove(k) => {
+                if k < self.n.schedule.len() {
+                    self.n.schedule.remove(k);
+                    return self.notif_saved(notifconf::set_schedule(&self.n.schedule));
+                }
+            }
+            Msg::NTest => {
+                return Task::perform(|| {
+                    let _ = std::process::Command::new("heronotify")
+                        .args(["send", "--app", "Appearance", "This is how notifications look", "They show here for as long as set, and wait in HeroBar's list after."])
+                        .status();
+                    Msg::Flush(u64::MAX)
+                });
             }
             Msg::TryLauncher => {
                 return Task::perform(|| {
@@ -1415,18 +1525,18 @@ impl App for Appearance {
     }
 
     fn view(&self) -> Element<Self, Msg> {
-        const PAGES: [Page; 4] = [Page::Theme, Page::Bar, Page::Launcher, Page::Wallpaper];
+        const PAGES: [Page; 5] = [Page::Theme, Page::Bar, Page::Launcher, Page::Wallpaper, Page::Notifications];
         row(vec![
             column(vec![
                 heading("Appearance").fixed(40),
                 // The highlight slides to the chosen page.
                 segmented(
-                    &["Theme", "Bar", "Launcher", "Wallpaper"],
+                    &["Theme", "Bar", "Launcher", "Wallpaper", "Notifications"],
                     true,
                     |s: &Appearance| PAGES.iter().position(|&p| p == s.page).unwrap_or(0),
                     |i| Msg::Page(PAGES[i]),
                 )
-                .fixed(4 * 36 + 3 * 8),
+                .fixed(5 * 36 + 4 * 8),
                 spacer(),
                 text(|s: &Appearance| s.status.clone()).fixed(24),
             ])
@@ -1437,6 +1547,7 @@ impl App for Appearance {
                 bar_page().transition(|s: &Appearance| s.page == Page::Bar),
                 launcher_page().transition(|s: &Appearance| s.page == Page::Launcher),
                 wallpaper_page().transition(|s: &Appearance| s.page == Page::Wallpaper),
+                notifications_page().transition(|s: &Appearance| s.page == Page::Notifications),
             ]),
         ])
         .padding(16)
@@ -1500,6 +1611,71 @@ fn preview() -> Element<Appearance, Msg> {
             draw::draw_pie(tx + tw - th + 3, ty + 3, th - 6, th - 6, 0.0, 360.0);
         },
     )
+}
+
+const POSITION_LABELS: [&str; 6] = [
+    notifconf::POSITIONS[0].1,
+    notifconf::POSITIONS[1].1,
+    notifconf::POSITIONS[2].1,
+    notifconf::POSITIONS[3].1,
+    notifconf::POSITIONS[4].1,
+    notifconf::POSITIONS[5].1,
+];
+const DAY_LABELS: [&str; 3] = [notifconf::DAYS[0].0, notifconf::DAYS[1].0, notifconf::DAYS[2].0];
+
+/// HeroNotify's settings: pop-ups, and do-not-disturb with the apps let
+/// through and the times it's on by itself.
+fn notifications_page() -> Element<Appearance, Msg> {
+    scroll(vec![
+        heading("Notifications").fixed(36),
+        caption("HeroNotify reads these for each notification.").fixed(22),
+        caption("Not installed? Install the heronotify package.").fixed(20).visible(|a: &Appearance| !a.n_installed),
+        setting("Pop-ups show", dropdown(|_: &Appearance| &POSITION_LABELS[..], |a: &Appearance| a.n.position, Msg::NPosition), 260),
+        int_slider("Seconds shown (0: stays)", 0.0..=30.0, |a| a.n.timeout as f64, Msg::NTimeout),
+        int_slider("Pop-ups at once", 1.0..=6.0, |a| a.n.max_shown as f64, Msg::NMaxShown),
+        int_slider("Width", 280.0..=600.0, |a| a.n.width as f64, Msg::NWidth),
+        heading("Do not disturb").fixed(34),
+        caption("Notifications still go to HeroBar's list, without popping up.").fixed(22),
+        toggle("On now (HeroBar's switch)", |a: &Appearance| a.n.dnd, Msg::NDnd).fixed(30),
+        toggle("Urgent ones still pop up (alarms, low battery)", |a: &Appearance| a.n.urgent, Msg::NUrgent).fixed(30),
+        label("Apps that still pop up (the name on their notifications)").fixed(28),
+        list(
+            |a: &Appearance| a.n.allow.len(),
+            |k| {
+                row(vec![
+                    text(move |a: &Appearance| a.n.allow.get(k).cloned().unwrap_or_default()),
+                    button("Remove", Msg::NAppRemove(k)).fixed(90),
+                ])
+                .fixed(34)
+            },
+        ),
+        row(vec![
+            text_input_submit(|a: &Appearance| a.n_app.clone(), Msg::NApp, Msg::NAppAdd),
+            button("Add", Msg::NAppAdd).fixed(90),
+        ])
+        .fixed(34),
+        label("On by itself").fixed(28),
+        list(
+            |a: &Appearance| a.n.schedule.len(),
+            |k| {
+                row(vec![
+                    text(move |a: &Appearance| a.n.schedule.get(k).map(|q| q.describe()).unwrap_or_default()),
+                    button("Remove", Msg::NQuietRemove(k)).fixed(90),
+                ])
+                .fixed(34)
+            },
+        ),
+        row(vec![
+            label("From").fixed(44),
+            text_input(|a: &Appearance| a.n_from.clone(), Msg::NFrom).fixed(70),
+            label("to").fixed(24),
+            text_input_submit(|a: &Appearance| a.n_to.clone(), Msg::NTo, Msg::NQuietAdd).fixed(70),
+            dropdown(|_: &Appearance| &DAY_LABELS[..], |a: &Appearance| a.n_days, Msg::NDays),
+            button("Add", Msg::NQuietAdd).fixed(90),
+        ])
+        .fixed(34),
+        row(vec![spacer(), primary_button("Send a test", Msg::NTest).fixed(140)]).fixed(34).visible(|a: &Appearance| a.n_installed),
+    ])
 }
 
 const LAYOUT_LABELS: [&str; 3] = [launcherconf::LAYOUTS[0].1, launcherconf::LAYOUTS[1].1, launcherconf::LAYOUTS[2].1];
