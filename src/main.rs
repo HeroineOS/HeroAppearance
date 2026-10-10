@@ -111,6 +111,8 @@ struct Appearance {
     n_to: String,
     n_days: usize,
     n_installed: bool,
+    /// How the test notification went.
+    n_test: String,
     launcher_installed: bool,
     /// Themes the user saved, and the name typed for the next one.
     saved: Vec<(String, Theme)>,
@@ -336,6 +338,7 @@ enum Msg {
     NQuietAdd,
     NQuietRemove(usize),
     NTest,
+    NTested(String),
     /// Open the launcher to see the changes.
     TryLauncher,
     // Saved themes
@@ -430,6 +433,7 @@ impl Appearance {
             n_to: "07:00".into(),
             n_days: 0,
             n_installed: installed("heronotify"),
+            n_test: String::new(),
             launcher_installed: installed("herolauncher"),
             saved: saved::load_all(),
             save_name: String::new(),
@@ -725,6 +729,7 @@ impl App for Appearance {
                 if p == Page::Notifications {
                     // HeroBar's switch may have changed it.
                     self.n = notifconf::read();
+                    self.n_installed = installed("heronotify");
                 }
                 if p == Page::Wallpaper && !std::mem::replace(&mut self.w_loaded, true) {
                     return self.wall_load();
@@ -929,12 +934,29 @@ impl App for Appearance {
                 }
             }
             Msg::NTest => {
+                self.n_test = "Sending...".into();
                 return Task::perform(|| {
-                    let _ = std::process::Command::new("heronotify")
-                        .args(["send", "--app", "Appearance", "This is how notifications look", "They show here for as long as set, and wait in HeroBar's list after."])
-                        .status();
-                    Msg::Flush(u64::MAX)
+                    let out = std::process::Command::new("heronotify")
+                        .args(["send", "--app", "Appearance", "Test notification", "If you can read this, notifications work. It's in HeroBar's list too."])
+                        .stdin(std::process::Stdio::null())
+                        .output();
+                    Msg::NTested(match out {
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "HeroNotify isn't installed (the heronotify package).".into(),
+                        Err(e) => format!("Couldn't send it: {e}"),
+                        Ok(o) => {
+                            let said = |b: &[u8]| String::from_utf8_lossy(b).trim().trim_start_matches("heronotify: ").to_string();
+                            match (o.status.success(), said(&o.stdout)) {
+                                (true, s) if s == "sent" || s.is_empty() => "Sent: it should be showing now.".into(),
+                                (true, s) => format!("Sent, {}", s.trim_start_matches("sent, ")),
+                                (false, _) => format!("Couldn't send it: {}", said(&o.stderr)),
+                            }
+                        }
+                    })
                 });
+            }
+            Msg::NTested(r) => {
+                self.n_test = r;
+                self.n_installed = installed("heronotify");
             }
             Msg::TryLauncher => {
                 return Task::perform(|| {
@@ -1627,11 +1649,12 @@ const DAY_LABELS: [&str; 3] = [notifconf::DAYS[0].0, notifconf::DAYS[1].0, notif
 /// through and the times it's on by itself.
 fn notifications_page() -> Element<Appearance, Msg> {
     scroll(vec![
-        heading("Notifications").fixed(36),
-        caption("HeroNotify reads these for each notification.").fixed(22),
+        row(vec![heading("Notifications"), primary_button("Send a test notification", Msg::NTest).fixed(210)]).fixed(36),
+        text(|a: &Appearance| a.n_test.clone()).fixed(24).visible(|a: &Appearance| !a.n_test.is_empty()),
+        caption("HeroNotify reads these for each notification. 0 seconds: pop-ups stay until closed.").fixed(22),
         caption("Not installed? Install the heronotify package.").fixed(20).visible(|a: &Appearance| !a.n_installed),
         setting("Pop-ups show", dropdown(|_: &Appearance| &POSITION_LABELS[..], |a: &Appearance| a.n.position, Msg::NPosition), 260),
-        int_slider("Seconds shown (0: stays)", 0.0..=30.0, |a| a.n.timeout as f64, Msg::NTimeout),
+        int_slider("Seconds shown", 0.0..=30.0, |a| a.n.timeout as f64, Msg::NTimeout),
         int_slider("Pop-ups at once", 1.0..=6.0, |a| a.n.max_shown as f64, Msg::NMaxShown),
         int_slider("Width", 280.0..=600.0, |a| a.n.width as f64, Msg::NWidth),
         heading("Do not disturb").fixed(34),
@@ -1674,7 +1697,6 @@ fn notifications_page() -> Element<Appearance, Msg> {
             button("Add", Msg::NQuietAdd).fixed(90),
         ])
         .fixed(34),
-        row(vec![spacer(), primary_button("Send a test", Msg::NTest).fixed(140)]).fixed(34).visible(|a: &Appearance| a.n_installed),
     ])
 }
 
