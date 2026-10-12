@@ -111,6 +111,8 @@ struct Appearance {
     n_to: String,
     n_days: usize,
     n_installed: bool,
+    rename_to: String,
+    rename_msg: String,
     /// How the test notification went.
     n_test: String,
     launcher_installed: bool,
@@ -339,6 +341,9 @@ enum Msg {
     NQuietRemove(usize),
     NTest,
     NUse,
+    SetLabel(String),
+    RenameTo(String),
+    RenameDo,
     NTested(String),
     /// Open the launcher to see the changes.
     TryLauncher,
@@ -390,6 +395,7 @@ fn parse_hex(s: &str) -> Option<Color> {
 impl Appearance {
     fn new() -> Appearance {
         let theme = Theme::load();
+        barconf::load_labels();
         let (bar, bar_error) = match BarDoc::load(barconf::default_path()) {
             Ok(d) => (Some(d), None),
             Err(e) => (None, Some(e)),
@@ -434,6 +440,8 @@ impl Appearance {
             n_to: "07:00".into(),
             n_days: 0,
             n_installed: installed("heronotify"),
+            rename_to: String::new(),
+            rename_msg: String::new(),
             n_test: String::new(),
             launcher_installed: installed("herolauncher"),
             saved: saved::load_all(),
@@ -583,6 +591,8 @@ impl Appearance {
     }
 
     fn load_edit(&mut self) {
+        self.rename_to = self.selected.as_deref().and_then(|n| n.split_once('/')).map(|(_, r)| r.to_owned()).unwrap_or_default();
+        self.rename_msg.clear();
         let (Some(d), Some(name)) = (&self.bar, &self.selected) else {
             return;
         };
@@ -954,6 +964,47 @@ impl App for Appearance {
                         }
                     })
                 });
+            }
+            Msg::SetLabel(l) => {
+                if let Some(n) = self.selected.clone() {
+                    barconf::set_label(&n, &l);
+                    self.group_labels = self.groups.iter().map(|(g, _)| barconf::pretty(g)).collect();
+                }
+            }
+            Msg::RenameTo(t) => self.rename_to = t,
+            Msg::RenameDo => {
+                let Some(old) = self.selected.clone() else { return Task::none() };
+                let kind = barconf::kind_of(&old).to_owned();
+                let t = self.rename_to.trim();
+                if t.contains('/') || t.chars().any(char::is_control) {
+                    self.rename_msg = "No slashes in a name.".into();
+                    return Task::none();
+                }
+                if t.is_empty() && matches!(kind.as_str(), "custom" | "group") {
+                    self.rename_msg = "This kind needs a name.".into();
+                    return Task::none();
+                }
+                let new = if t.is_empty() { kind } else { format!("{kind}/{t}") };
+                if new == old {
+                    return Task::none();
+                }
+                let r = match self.bar_mut() {
+                    Some(d) => d.rename_module(&old, &new),
+                    None => return Task::none(),
+                };
+                match r {
+                    Err(e) => self.rename_msg = e,
+                    Ok(()) => {
+                        self.rename_msg.clear();
+                        self.read_bar();
+                        if self.edit.in_group.as_deref() == Some(old.as_str()) {
+                            self.edit.in_group = Some(new.clone());
+                        }
+                        self.selected = Some(new);
+                        self.load_edit();
+                        return self.touched(false);
+                    }
+                }
             }
             Msg::NUse => {
                 self.n_test = "Switching...".into();
@@ -2671,6 +2722,21 @@ fn bar_page() -> Element<Appearance, Msg> {
         })
         .fixed(36)
         .visible(|a: &Appearance| a.selected.is_some()),
+        row(vec![
+            label("Label (here only)").fixed(150),
+            text_input(|a: &Appearance| a.selected.as_deref().and_then(barconf::label_of).unwrap_or_default(), Msg::SetLabel),
+        ])
+        .fixed(34)
+        .visible(|a: &Appearance| a.selected.is_some()),
+        row(vec![
+            label("Name in the bar's config").fixed(150),
+            text_input(|a: &Appearance| a.rename_to.clone(), Msg::RenameTo),
+            button("Rename", Msg::RenameDo).fixed(90),
+        ])
+        .fixed(34)
+        .visible(|a: &Appearance| a.selected.is_some()),
+        caption("Label: only shown in this app. Name: what follows the kind (blank for just \"bluetooth\").").fixed(20).visible(|a: &Appearance| a.selected.is_some()),
+        text(|a: &Appearance| a.rename_msg.clone()).fixed(22).visible(|a: &Appearance| !a.rename_msg.is_empty()),
         group_chips().fixed(40).visible(|a: &Appearance| !group_of(a).is_empty()),
         row(vec![spacer(), button("Remove module", Msg::RemoveSelected).fixed(150)])
             .fixed(34)

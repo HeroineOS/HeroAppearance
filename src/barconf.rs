@@ -316,6 +316,33 @@ impl BarDoc {
         .expect("unbounded")
     }
 
+    /// Renames a module everywhere: sections, groups' lists, its settings.
+    pub fn rename_module(&mut self, old: &str, new: &str) -> Result<(), String> {
+        if self.names().iter().any(|n| n == new) {
+            return Err(format!("There is already a module called {}", pretty(new)));
+        }
+        for key in SECTIONS {
+            let mut v = self.section(key);
+            if v.contains(&old.to_owned()) {
+                v.iter_mut().for_each(|n| if n == old { *n = new.to_owned() });
+                self.set_section(key, &v);
+            }
+        }
+        for (g, members) in self.groups() {
+            if members.iter().any(|m| m == old) {
+                let m: Vec<String> = members.iter().map(|m| if m == old { new.to_owned() } else { m.clone() }).collect();
+                self.set_module_list(&g, "modules", &m);
+            }
+        }
+        if let Some(m) = self.doc.get_mut("modules").and_then(|m| m.as_table_like_mut()) {
+            if let Some(item) = m.remove(old) {
+                m.insert(new, item);
+            }
+        }
+        move_label(old, new);
+        Ok(())
+    }
+
     /// The groups (names) and their modules.
     pub fn groups(&self) -> Vec<(String, Vec<String>)> {
         let mut v: Vec<(String, Vec<String>)> = Vec::new();
@@ -464,9 +491,60 @@ pub fn get<'a>(list: &'a [Pinned], path: &[usize]) -> Option<&'a Pinned> {
     cur.get(last)
 }
 
+static LABELS: std::sync::RwLock<Vec<(String, String)>> = std::sync::RwLock::new(Vec::new());
+
+fn labels_path() -> PathBuf {
+    default_path().with_file_name("appearance-labels.toml")
+}
+
+/// The name the user gave a module in Appearance (never seen by HeroBar).
+pub fn label_of(name: &str) -> Option<String> {
+    LABELS.read().ok()?.iter().find(|(n, _)| n == name).map(|(_, l)| l.clone())
+}
+
+pub fn load_labels() {
+    let doc = std::fs::read_to_string(labels_path()).ok().and_then(|t| t.parse::<DocumentMut>().ok());
+    let list = doc
+        .map(|d| d.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.to_owned(), s.to_owned()))).collect())
+        .unwrap_or_default();
+    if let Ok(mut l) = LABELS.write() {
+        *l = list;
+    }
+}
+
+/// Sets (or, when empty, clears) a module's label, and saves them all.
+pub fn set_label(name: &str, label: &str) {
+    if let Ok(mut l) = LABELS.write() {
+        l.retain(|(n, _)| n != name);
+        if !label.trim().is_empty() {
+            l.push((name.to_owned(), label.to_owned()));
+        }
+        let mut doc = DocumentMut::new();
+        for (n, v) in l.iter() {
+            doc[n.as_str()] = value(v.as_str());
+        }
+        let path = labels_path();
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(path, doc.to_string());
+    }
+}
+
+/// A module's label follows it when its name changes.
+fn move_label(old: &str, new: &str) {
+    if let Some(l) = label_of(old) {
+        set_label(old, "");
+        set_label(new, &l);
+    }
+}
+
 /// "custom/menu" → "menu", "cpu" → "CPU", "cpu/2" → "CPU 2",
 /// "group/system" → "system".
 pub fn pretty(name: &str) -> String {
+    if let Some(l) = label_of(name) {
+        return l;
+    }
     let (kind, rest) = match name.split_once('/') {
         Some((k, r)) => (k, Some(r)),
         None => (name, None),
