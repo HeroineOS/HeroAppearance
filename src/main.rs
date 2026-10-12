@@ -338,6 +338,7 @@ enum Msg {
     NQuietAdd,
     NQuietRemove(usize),
     NTest,
+    NUse,
     NTested(String),
     /// Open the launcher to see the changes.
     TryLauncher,
@@ -951,6 +952,18 @@ impl App for Appearance {
                                 (false, _) => format!("Couldn't send it: {}", said(&o.stderr)),
                             }
                         }
+                    })
+                });
+            }
+            Msg::NUse => {
+                self.n_test = "Switching...".into();
+                return Task::perform(|| {
+                    let out = std::process::Command::new("heronotify").arg("use").stdin(std::process::Stdio::null()).output();
+                    Msg::NTested(match out {
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "HeroNotify isn't installed (the heronotify package).".into(),
+                        Err(e) => format!("Couldn't switch: {e}"),
+                        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
+                        Ok(o) => format!("Couldn't switch: {}", String::from_utf8_lossy(&o.stderr).trim().trim_start_matches("heronotify: ")),
                     })
                 });
             }
@@ -1650,6 +1663,7 @@ const DAY_LABELS: [&str; 3] = [notifconf::DAYS[0].0, notifconf::DAYS[1].0, notif
 fn notifications_page() -> Element<Appearance, Msg> {
     scroll(vec![
         row(vec![heading("Notifications"), primary_button("Send a test notification", Msg::NTest).fixed(210)]).fixed(36),
+        row(vec![button("Use HeroNotify (stop any other notification program)", Msg::NUse).fixed(400)]).fixed(34),
         text(|a: &Appearance| a.n_test.clone()).fixed(24).visible(|a: &Appearance| !a.n_test.is_empty()),
         caption("HeroNotify reads these for each notification. 0 seconds: pop-ups stay until closed.").fixed(22),
         caption("Not installed? Install the heronotify package.").fixed(20).visible(|a: &Appearance| !a.n_installed),
