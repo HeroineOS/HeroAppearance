@@ -1,6 +1,6 @@
 [package]
 name = "heroappearance"
-version = "0.1.27"
+version = "0.1.28"
 description = "Appearance: customize the HeroUI theme and HeroBar"
 repository = "https://github.com/HeroineOS/HeroAppearance"
 license = "MIT OR Apache-2.0"
@@ -37,5 +37,6 @@ second, and comments in bar.toml are kept."""
 assets = [
     ["target/release/heroappearance", "usr/bin/", "755"],
     ["res/heroappearance.desktop", "usr/share/applications/", "644"],
+    ["res/heroappearance.svg", "usr/share/icons/hicolor/scalable/apps/heroappearance.svg", "644"],
     ["README.md", "usr/share/doc/heroappearance/README.md", "644"],
 ]
