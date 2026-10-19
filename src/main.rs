@@ -369,6 +369,9 @@ enum Msg {
     WPathTyped(String),
     WPathSubmit,
     WBrowse,
+    WAddFolder,
+    WFolderPicked(Vec<std::path::PathBuf>),
+    WUsualFolders,
     WBrowsed(Vec<std::path::PathBuf>),
     WMode(usize),
     WThemeColor(bool),
@@ -524,7 +527,7 @@ impl Appearance {
     /// First visit: find pictures, screens, and whether it's running.
     fn wall_load(&mut self) -> Task<Msg> {
         Task::batch([
-            Task::perform(|| Msg::WScanned(wallconf::scan(120))),
+            Task::perform(|| Msg::WScanned(wallconf::scan(if wallconf::custom_folders().is_empty() { 120 } else { 300 }))),
             Task::perform(|| {
                 let out = std::process::Command::new("herowallpaper").arg("--outputs").stderr(std::process::Stdio::null()).output();
                 let names = out.ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).lines().map(str::to_owned).collect()).unwrap_or_default();
@@ -834,6 +837,30 @@ impl App for Appearance {
                     ..Default::default()
                 };
                 return heroui::file_dialog::open(options, Msg::WBrowsed);
+            }
+            Msg::WAddFolder => {
+                let options = heroui::file_dialog::Options {
+                    title: "Choose a folder of pictures".into(),
+                    directory: true,
+                    folder: std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Pictures")).filter(|p| p.is_dir()),
+                    accept: Some("Choose".into()),
+                    ..Default::default()
+                };
+                return heroui::file_dialog::open(options, Msg::WFolderPicked);
+            }
+            Msg::WFolderPicked(paths) => {
+                let mut list = wallconf::custom_folders();
+                for p in paths.into_iter().filter(|p| p.is_dir()) {
+                    if !list.contains(&p) {
+                        list.push(p);
+                    }
+                }
+                wallconf::set_custom_folders(&list);
+                return Task::perform(|| Msg::WScanned(wallconf::scan(300)));
+            }
+            Msg::WUsualFolders => {
+                wallconf::set_custom_folders(&[]);
+                return Task::perform(|| Msg::WScanned(wallconf::scan(120)));
             }
             Msg::WBrowsed(paths) => {
                 if let Some(f) = paths.into_iter().next().filter(|f| f.is_file()) {
@@ -1714,7 +1741,7 @@ const DAY_LABELS: [&str; 3] = [notifconf::DAYS[0].0, notifconf::DAYS[1].0, notif
 fn notifications_page() -> Element<Appearance, Msg> {
     scroll(vec![
         row(vec![heading("Notifications"), primary_button("Send a test notification", Msg::NTest).fixed(210)]).fixed(36),
-        row(vec![button("Use HeroNotify (stop any other notification program)", Msg::NUse).fixed(400)]).fixed(34),
+        row(vec![button("Use HeroNotify", Msg::NUse).fixed(170), caption("Stops any other notification program.")]).fixed(34),
         text(|a: &Appearance| a.n_test.clone()).fixed(24).visible(|a: &Appearance| !a.n_test.is_empty()),
         caption("HeroNotify reads these for each notification. 0 seconds: pop-ups stay until closed.").fixed(22),
         caption("Not installed? Install the heronotify package.").fixed(20).visible(|a: &Appearance| !a.n_installed),
@@ -1855,6 +1882,19 @@ fn wallpaper_page() -> Element<Appearance, Msg> {
             .visible(|a: &Appearance| a.w_output > 0 && a.w_own),
         gallery(),
         row(vec![
+            caption_text(|a: &Appearance| {
+                let c = wallconf::custom_folders();
+                match c.len() {
+                    0 => "Showing the usual picture folders.".to_string(),
+                    1 => format!("Showing {}", c[0].display()),
+                    n => format!("Showing {n} chosen folders"),
+                }
+            }),
+            button("Add a folder...", Msg::WAddFolder).fixed(150),
+            button("Usual folders", Msg::WUsualFolders).fixed(130).visible(|_: &Appearance| !wallconf::custom_folders().is_empty()),
+        ])
+        .fixed(34),
+        row(vec![
             text_input_submit(|a: &Appearance| a.w_path.clone(), Msg::WPathTyped, Msg::WPathSubmit),
             button("Browse…", Msg::WBrowse).fixed(110),
         ])
@@ -1905,6 +1945,8 @@ fn gallery() -> Element<Appearance, Msg> {
         items: Vec<(PathBuf, Option<Option<PathBuf>>)>,
         selected: Option<usize>,
         hover: Option<usize>,
+        /// The tile a left press landed on, and the gallery's y then.
+        pressed: Option<(usize, i32)>,
         color: Option<Color>,
         /// Thumbnails at tile size (None: unreadable).
         cache: HashMap<(PathBuf, i32, i32), Option<RgbImage>>,
@@ -2001,11 +2043,21 @@ fn gallery() -> Element<Appearance, Msg> {
                     }
                     true
                 }
-                Event::Push => true,
+                Event::Push => {
+                    let n = g.borrow().items.len();
+                    let left = heroui::fltk::app::event_button() == 1;
+                    g.borrow_mut().pressed = if left { tile_at(f, n, heroui::fltk::app::event_x(), heroui::fltk::app::event_y()).map(|t| (t, f.y())) } else { None };
+                    true
+                }
                 Event::Released => {
                     let n = g.borrow().items.len();
-                    if let Some(i) = tile_at(f, n, heroui::fltk::app::event_x(), heroui::fltk::app::event_y()) {
-                        emit(Msg::WPick(i));
+                    let at = tile_at(f, n, heroui::fltk::app::event_x(), heroui::fltk::app::event_y());
+                    let pressed = g.borrow_mut().pressed.take();
+                    // Only a click that stayed on its tile, in a gallery that didn't scroll under it.
+                    if let (Some(i), Some((p, y))) = (at, pressed) {
+                        if i == p && y == f.y() {
+                            emit(Msg::WPick(i));
+                        }
                     }
                     true
                 }

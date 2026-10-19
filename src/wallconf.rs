@@ -134,7 +134,33 @@ impl WallDoc {
 }
 
 /// Folders wallpapers usually are in.
+fn custom_path() -> PathBuf {
+    default_path().with_file_name("appearance-wallpaper-folders.txt")
+}
+
+/// The folders the user chose to show instead of the usual ones.
+pub fn custom_folders() -> Vec<PathBuf> {
+    std::fs::read_to_string(custom_path()).unwrap_or_default().lines().map(str::trim).filter(|l| !l.is_empty()).map(PathBuf::from).collect()
+}
+
+pub fn set_custom_folders(list: &[PathBuf]) {
+    let path = custom_path();
+    if list.is_empty() {
+        let _ = std::fs::remove_file(path);
+        return;
+    }
+    if let Some(d) = path.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let text: Vec<String> = list.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+    let _ = std::fs::write(path, text.join("\n") + "\n");
+}
+
 fn folders() -> Vec<PathBuf> {
+    let custom = custom_folders();
+    if !custom.is_empty() {
+        return custom;
+    }
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
     let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share"));
     vec![
@@ -188,7 +214,7 @@ pub fn scan(max: usize) -> Vec<PathBuf> {
     }
     for f in folders() {
         // ~/Pictures itself only at the top (photo libraries go deep).
-        let depth = if f.ends_with("Pictures") { 0 } else { 3 };
+        let depth = if f.ends_with("Pictures") && custom_folders().is_empty() { 0 } else { 3 };
         let mut found = vec![];
         walk(&f, depth, &mut found, max);
         for p in found {
