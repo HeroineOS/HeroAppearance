@@ -138,7 +138,7 @@ fn custom_path() -> PathBuf {
     default_path().with_file_name("appearance-wallpaper-folders.txt")
 }
 
-/// The folders the user chose to show instead of the usual ones.
+/// The folders the user chose to show.
 pub fn custom_folders() -> Vec<PathBuf> {
     std::fs::read_to_string(custom_path()).unwrap_or_default().lines().map(str::trim).filter(|l| !l.is_empty()).map(PathBuf::from).collect()
 }
@@ -156,30 +156,16 @@ pub fn set_custom_folders(list: &[PathBuf]) {
     let _ = std::fs::write(path, text.join("\n") + "\n");
 }
 
+/// Only folders the user chose: nothing is shown until one is picked.
 fn folders() -> Vec<PathBuf> {
-    let custom = custom_folders();
-    if !custom.is_empty() {
-        return custom;
-    }
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-    let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share"));
-    vec![
-        home.join("Pictures/Wallpapers"),
-        home.join("Pictures/wallpapers"),
-        home.join("Pictures"),
-        home.join("Wallpapers"),
-        data.join("backgrounds"),
-        data.join("wallpapers"),
-        PathBuf::from("/usr/share/backgrounds"),
-        PathBuf::from("/usr/share/wallpapers"),
-    ]
+    custom_folders()
 }
 
 fn is_picture(p: &Path) -> bool {
     p.extension().and_then(|e| e.to_str()).is_some_and(|e| EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
 }
 
-/// Pictures in the usual wallpaper folders (a few levels down), at most
+/// Pictures in the chosen folders (a few levels down), at most
 /// `max`. A KDE-style wallpaper (`NAME/contents/images/WxH.jpg`, one file
 /// per screen size) counts once, at its largest.
 pub fn scan(max: usize) -> Vec<PathBuf> {

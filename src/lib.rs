@@ -532,7 +532,7 @@ impl Appearance {
     /// First visit: find pictures, screens, and whether it's running.
     fn wall_load(&mut self) -> Task<Msg> {
         Task::batch([
-            Task::perform(|| Msg::WScanned(wallconf::scan(if wallconf::custom_folders().is_empty() { 120 } else { 300 }))),
+            Task::perform(|| Msg::WScanned(wallconf::scan(300))),
             Task::perform(|| {
                 let out = std::process::Command::new("herowallpaper").arg("--outputs").stderr(std::process::Stdio::null()).output();
                 let names = out.ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).lines().map(str::to_owned).collect()).unwrap_or_default();
@@ -865,7 +865,7 @@ impl App for Appearance {
             }
             Msg::WUsualFolders => {
                 wallconf::set_custom_folders(&[]);
-                return Task::perform(|| Msg::WScanned(wallconf::scan(120)));
+                return Task::perform(|| Msg::WScanned(wallconf::scan(300)));
             }
             Msg::WBrowsed(paths) => {
                 if let Some(f) = paths.into_iter().next().filter(|f| f.is_file()) {
@@ -1890,13 +1890,13 @@ pub fn wallpaper_page() -> Element<Appearance, Msg> {
             caption_text(|a: &Appearance| {
                 let c = wallconf::custom_folders();
                 match c.len() {
-                    0 => "Showing the usual picture folders.".to_string(),
+                    0 => "No folder chosen: pick one to see its pictures.".to_string(),
                     1 => format!("Showing {}", c[0].display()),
                     n => format!("Showing {n} chosen folders"),
                 }
             }),
             button("Add a folder...", Msg::WAddFolder).fixed(150),
-            button("Usual folders", Msg::WUsualFolders).fixed(130).visible(|_: &Appearance| !wallconf::custom_folders().is_empty()),
+            button("Remove", Msg::WUsualFolders).fixed(100).visible(|_: &Appearance| !wallconf::custom_folders().is_empty()),
         ])
         .fixed(34),
         row(vec![
